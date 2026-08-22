@@ -130,6 +130,7 @@ menu = st.sidebar.radio("系統功能導覽", [
     "➕ 新增投測項目", 
     "✏️ 修改 / 刪除專案", 
     "📝 OP 數據填寫與變化率繪圖", 
+    "📊 跨批號電性數據比較",
     "📅 甘特圖排程檢視"
 ])
 
@@ -370,9 +371,7 @@ elif menu == "✏️ 修改 / 刪除專案":
 
         if submit_edit:
             try:
-                # 若修改了專案編號/批號，需同時更動 projects 與 test_data
                 if new_id != selected_p_id:
-                    # 1. 新增新 ID 的專案
                     update_data = {
                         "id": new_id,
                         "owner": new_owner,
@@ -385,14 +384,9 @@ elif menu == "✏️ 修改 / 刪除專案":
                         "description": new_desc
                     }
                     supabase.table("projects").insert(update_data).execute()
-                    
-                    # 2. 更新現有測試數據的 project_id 關聯
                     supabase.table("test_data").update({"project_id": new_id}).eq("project_id", selected_p_id).execute()
-                    
-                    # 3. 刪除舊 ID 專案
                     supabase.table("projects").delete().eq("id", selected_p_id).execute()
                 else:
-                    # 未改 ID，直接更新專案內容
                     update_data = {
                         "owner": new_owner,
                         "spec": new_spec,
@@ -414,7 +408,6 @@ elif menu == "✏️ 修改 / 刪除專案":
         st.subheader("⚠️ 危險操作區")
         if st.button(f"🗑️ 徹底刪除專案 #{selected_p_id} (含所有測試數據)", type="secondary"):
             try:
-                # 刪除 projects (受 CASCADE 影響或主動刪除 test_data)
                 supabase.table("test_data").delete().eq("project_id", selected_p_id).execute()
                 supabase.table("projects").delete().eq("id", selected_p_id).execute()
                 st.success(f"✅ 專案 #{selected_p_id} 及其測試數據已全部徹底刪除！")
@@ -575,7 +568,178 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
             st.info("💡 請先完成並上傳 **0H 數據**，系統將自動為您繪製 Cap/DF/ESR/LC 變化趨勢圖與統計表。")
 
 # -----------------------------------------------------------------------------
-# 功能 6：甘特圖排程檢視
+# 功能 6：跨批號電性數據比較 (新增功能)
+# -----------------------------------------------------------------------------
+elif menu == "📊 跨批號電性數據比較":
+    st.header("📊 多批號 / 實驗組電性平均值對比分析")
+    
+    if not projects_list:
+        st.warning("目前尚無投測項目可供比較。")
+    else:
+        # 篩選出擁有至少 0H 數據的專案
+        valid_projects = [p for p in projects_list if (p['id'] in test_data_dict) and ("0H" in test_data_dict[p['id']])]
+        
+        if not valid_projects:
+            st.warning("目前尚未有專案上傳 0H 數據，請先至少建立並填寫一個專案的 0H 數據。")
+        else:
+            project_options = [f"#{p['id']} - {p['spec']} ({p['condition']})" for p in valid_projects]
+            selected_options = st.multiselect(
+                "🔍 請選擇要進行平均值對比的批號 / 專案 (可複選)：",
+                options=project_options,
+                default=project_options[:min(3, len(project_options))]
+            )
+            
+            selected_ids = [opt.split(" - ")[0].replace("#", "") for opt in selected_options]
+            
+            if not selected_ids:
+                st.info("請至少選擇一個批號進行比較。")
+            else:
+                st.markdown("---")
+                tab_comp_cap, tab_comp_esr, tab_comp_df, tab_comp_lc = st.tabs([
+                    "⚡ 平均 Cap 變化率 (%)", 
+                    "🔌 平均 ESR 變化率 (%)", 
+                    "📉 平均 DF (%)", 
+                    "💧 平均 LC (uA)"
+                ])
+
+                # 1. 電容平均變化率對比
+                with tab_comp_cap:
+                    fig_comp_cap = go.Figure()
+                    table_rows = []
+                    
+                    for p_id in selected_ids:
+                        p_info = next(p for p in projects_list if p['id'] == p_id)
+                        p_data = test_data_dict[p_id]
+                        
+                        df_0h = p_data["0H"]
+                        avg_cap_0 = df_0h["Cap (uF)"].mean()
+                        
+                        avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
+                        
+                        hours_x = []
+                        avg_rates_y = []
+                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "0H 平均電容 (uF)": round(avg_cap_0, 2)}
+                        
+                        for h in avail_h:
+                            hour_key = f"{h}H"
+                            avg_cap_h = p_data[hour_key]["Cap (uF)"].mean()
+                            rate = ((avg_cap_h - avg_cap_0) / avg_cap_0) * 100
+                            hours_x.append(h)
+                            avg_rates_y.append(rate)
+                            if h != 0:
+                                row_dict[f"{h}H 平均變化率(%)"] = round(rate, 2)
+                                
+                        fig_comp_cap.add_trace(go.Scatter(
+                            x=hours_x, y=avg_rates_y, mode='lines+markers', name=f"#{p_id} ({p_info['spec']})"
+                        ))
+                        table_rows.append(row_dict)
+                        
+                    fig_comp_cap.add_hline(y=-20, line_dash="dash", line_color="red", annotation_text="Cap 下限 (-20%)")
+                    fig_comp_cap.update_layout(title="跨批號平均 Cap 變化率對比趨勢 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔCap (%)")
+                    st.plotly_chart(fig_comp_cap, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
+                # 2. ESR 平均變化率對比
+                with tab_comp_esr:
+                    fig_comp_esr = go.Figure()
+                    table_rows_esr = []
+                    
+                    for p_id in selected_ids:
+                        p_info = next(p for p in projects_list if p['id'] == p_id)
+                        p_data = test_data_dict[p_id]
+                        
+                        df_0h = p_data["0H"]
+                        avg_esr_0 = df_0h["ESR (mΩ)"].mean()
+                        
+                        avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
+                        
+                        hours_x = []
+                        avg_rates_y = []
+                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "0H 平均 ESR (mΩ)": round(avg_esr_0, 2)}
+                        
+                        for h in avail_h:
+                            hour_key = f"{h}H"
+                            avg_esr_h = p_data[hour_key]["ESR (mΩ)"].mean()
+                            rate = ((avg_esr_h - avg_esr_0) / avg_esr_0) * 100
+                            hours_x.append(h)
+                            avg_rates_y.append(rate)
+                            if h != 0:
+                                row_dict[f"{h}H 平均變化率(%)"] = round(rate, 2)
+                                
+                        fig_comp_esr.add_trace(go.Scatter(
+                            x=hours_x, y=avg_rates_y, mode='lines+markers', name=f"#{p_id} ({p_info['spec']})"
+                        ))
+                        table_rows_esr.append(row_dict)
+                        
+                    fig_comp_esr.add_hline(y=200, line_dash="dash", line_color="red", annotation_text="ESR 上限 (+200%)")
+                    fig_comp_esr.update_layout(title="跨批號平均 ESR 變化率對比趨勢 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔESR (%)")
+                    st.plotly_chart(fig_comp_esr, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_rows_esr), use_container_width=True, hide_index=True)
+
+                # 3. DF 平均值對比
+                with tab_comp_df:
+                    fig_comp_df = go.Figure()
+                    table_rows_df = []
+                    
+                    for p_id in selected_ids:
+                        p_info = next(p for p in projects_list if p['id'] == p_id)
+                        p_data = test_data_dict[p_id]
+                        
+                        avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
+                        
+                        hours_x = []
+                        avg_vals_y = []
+                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition']}
+                        
+                        for h in avail_h:
+                            hour_key = f"{h}H"
+                            avg_df_h = p_data[hour_key]["DF (%)"].mean()
+                            hours_x.append(h)
+                            avg_vals_y.append(avg_df_h)
+                            row_dict[f"{h}H 平均 DF(%)"] = round(avg_df_h, 2)
+                                
+                        fig_comp_df.add_trace(go.Scatter(
+                            x=hours_x, y=avg_vals_y, mode='lines+markers', name=f"#{p_id} ({p_info['spec']})"
+                        ))
+                        table_rows_df.append(row_dict)
+                        
+                    fig_comp_df.update_layout(title="跨批號平均 DF 損耗角對比趨勢 (%)", xaxis_title="時數 (H)", yaxis_title="平均 DF (%)")
+                    st.plotly_chart(fig_comp_df, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_rows_df), use_container_width=True, hide_index=True)
+
+                # 4. LC 平均值對比
+                with tab_comp_lc:
+                    fig_comp_lc = go.Figure()
+                    table_rows_lc = []
+                    
+                    for p_id in selected_ids:
+                        p_info = next(p for p in projects_list if p['id'] == p_id)
+                        p_data = test_data_dict[p_id]
+                        
+                        avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
+                        
+                        hours_x = []
+                        avg_vals_y = []
+                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition']}
+                        
+                        for h in avail_h:
+                            hour_key = f"{h}H"
+                            avg_lc_h = p_data[hour_key]["LC (uA)"].mean()
+                            hours_x.append(h)
+                            avg_vals_y.append(avg_lc_h)
+                            row_dict[f"{h}H 平均 LC(uA)"] = round(avg_lc_h, 2)
+                                
+                        fig_comp_lc.add_trace(go.Scatter(
+                            x=hours_x, y=avg_vals_y, mode='lines+markers', name=f"#{p_id} ({p_info['spec']})"
+                        ))
+                        table_rows_lc.append(row_dict)
+                        
+                    fig_comp_lc.update_layout(title="跨批號平均 LC 漏電流對比趨勢 (uA)", xaxis_title="時數 (H)", yaxis_title="平均 LC (uA)")
+                    st.plotly_chart(fig_comp_lc, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_rows_lc), use_container_width=True, hide_index=True)
+
+# -----------------------------------------------------------------------------
+# 功能 7：甘特圖排程檢視
 # -----------------------------------------------------------------------------
 elif menu == "📅 甘特圖排程檢視":
     st.header("📅 信賴性投測甘特圖與時間軸")
@@ -590,7 +754,6 @@ elif menu == "📅 甘特圖排程檢視":
             start = p['start_time']
             prev_time = start
             
-            # 明細表用的單筆專案資料
             row_detail = {
                 "專案編號": p['id'],
                 "負責人": p['owner'],
@@ -601,7 +764,6 @@ elif menu == "📅 甘特圖排程檢視":
             for h in p['hours_list']:
                 target_dt = start + timedelta(hours=h)
                 
-                # 甘特圖資料
                 gantt_data.append({
                     "Task": f"#{p['id']} ({p['spec']})",
                     "Start": prev_time,
@@ -611,15 +773,12 @@ elif menu == "📅 甘特圖排程檢視":
                     "預計取測時間": target_dt.strftime('%Y-%m-%d %H:%M')
                 })
                 prev_time = target_dt
-                
-                # 記錄各時數精確時間點
                 row_detail[f"{h}H 取測時間"] = target_dt.strftime('%m/%d %H:%M')
                 
             timetable_data.append(row_detail)
                 
         df_gantt = pd.DataFrame(gantt_data)
         
-        # 1. 甘特圖繪製
         fig_gantt = px.timeline(
             df_gantt, 
             x_start="Start", 
@@ -642,7 +801,6 @@ elif menu == "📅 甘特圖排程檢視":
 
         st.markdown("---")
         
-        # 2. 下方新增「各時數精確取測時間對照表」
         st.subheader("📋 各專案取測時間對照總表")
         st.caption("💡 以下直觀列出每個專案在各個取測時間點（HR）對應的精確日期與時間：")
         
