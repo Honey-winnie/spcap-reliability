@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from dateutil import parser as date_parser
 import plotly.graph_objects as go
 import plotly.express as px
 from supabase import create_client, Client
@@ -63,16 +64,22 @@ def load_projects():
         for r in raw:
             hours = [int(h.strip()) for h in str(r.get("hours_list", "")).split(",") if h.strip().isdigit()]
             
-            # 精準解析投入時間，避免被錯誤重置為當前時間
-            start_str = str(r.get("start_time", "")).replace("T", " ").strip()
+            # 精準解析投入時間，避免被錯誤重置為當前時間。
+            # 注意：如果 Supabase 的 start_time 欄位是 timestamptz 型別，讀出來的字串會帶時區
+            # 尾巴，例如 "2026-08-15T00:00:00+00:00" 或 "...Z"。舊版用 strptime 手動比對固定
+            # 格式，完全沒處理時區尾巴，導致每次都解析失敗、被迫 fallback 成 datetime.now()，
+            # 這也是「不管怎麼改，畫面時間都跟著目前時間漂移」的真正原因。改用 dateutil.parser，
+            # 它能正確解析各種 ISO 時間字串（含時區、含微秒），再統一轉成 naive datetime。
+            start_raw = str(r.get("start_time", "")).strip()
             start_dt = None
-            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
+            if start_raw and start_raw.lower() != "none":
                 try:
-                    start_dt = datetime.strptime(start_str.split(".")[0], fmt)
-                    break
-                except ValueError:
-                    continue
+                    parsed = date_parser.parse(start_raw)
+                    start_dt = parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+                except (ValueError, TypeError):
+                    start_dt = None
             
+            start_parse_failed = start_dt is None
             if start_dt is None:
                 start_dt = datetime.now()
                 
@@ -84,6 +91,7 @@ def load_projects():
                 "condition": str(r.get("condition", "")),
                 "status": str(r.get("status", "進行中")),
                 "start_time": start_dt,
+                "start_time_parse_failed": start_parse_failed,
                 "hours_list": hours,
                 "target_hours": f"{max(hours)}H" if hours else "0H",
                 "description": str(r.get("description", ""))
@@ -405,6 +413,12 @@ elif menu == "✏️ 修改 / 刪除專案":
         
         if target_p:
             st.divider()
+            if target_p.get('start_time_parse_failed'):
+                st.warning(
+                    "⚠️ 這筆專案的投入時間在資料庫中的格式無法被正確解析，"
+                    "下面顯示的是暫代用的目前時間，並非資料庫實際存的值！"
+                    "請重新設定正確的投入日期/時間並儲存一次即可修復。"
+                )
             init_start = target_p['start_time'] if isinstance(target_p['start_time'], datetime) else datetime.now()
 
             # 【修正重點 1】
