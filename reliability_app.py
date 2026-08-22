@@ -584,11 +584,24 @@ elif menu == "📅 甘特圖排程檢視":
         st.warning("目前尚無投測項目排程。")
     else:
         gantt_data = []
+        timetable_data = []
+        
         for p in projects_list:
             start = p['start_time']
             prev_time = start
+            
+            # 明細表用的單筆專案資料
+            row_detail = {
+                "專案編號": p['id'],
+                "負責人": p['owner'],
+                "產品規格": p['spec'],
+                "投入時間": start.strftime('%Y-%m-%d %H:%M')
+            }
+            
             for h in p['hours_list']:
                 target_dt = start + timedelta(hours=h)
+                
+                # 甘特圖資料
                 gantt_data.append({
                     "Task": f"#{p['id']} ({p['spec']})",
                     "Start": prev_time,
@@ -599,9 +612,14 @@ elif menu == "📅 甘特圖排程檢視":
                 })
                 prev_time = target_dt
                 
+                # 記錄各時數精確時間點
+                row_detail[f"{h}H 取測時間"] = target_dt.strftime('%m/%d %H:%M')
+                
+            timetable_data.append(row_detail)
+                
         df_gantt = pd.DataFrame(gantt_data)
         
-        # 移除區塊內擠壓的文字，改放到 Hover 提示框中
+        # 1. 甘特圖繪製
         fig_gantt = px.timeline(
             df_gantt, 
             x_start="Start", 
@@ -612,9 +630,7 @@ elif menu == "📅 甘特圖排程檢視":
             title="投測項目時間軸甘特圖"
         )
         
-        # 動態計算圖表高度（避免專案多時擠壓），改善排列
         calc_height = max(350, len(projects_list) * 80)
-        
         fig_gantt.update_yaxes(autorange="reversed")
         fig_gantt.update_layout(
             height=calc_height, 
@@ -623,3 +639,12 @@ elif menu == "📅 甘特圖排程檢視":
             hoverlabel=dict(bgcolor="white", font_size=13)
         )
         st.plotly_chart(fig_gantt, use_container_width=True)
+
+        st.markdown("---")
+        
+        # 2. 下方新增「各時數精確取測時間對照表」
+        st.subheader("📋 各專案取測時間對照總表")
+        st.caption("💡 以下直觀列出每個專案在各個取測時間點（HR）對應的精確日期與時間：")
+        
+        df_timetable = pd.DataFrame(timetable_data)
+        st.dataframe(df_timetable, use_container_width=True, hide_index=True)
