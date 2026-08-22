@@ -55,7 +55,7 @@ supabase = init_supabase()
 # -----------------------------------------------------------------------------
 # 3. 資料庫讀取輔助函式
 # -----------------------------------------------------------------------------
-ddef load_projects():
+def load_projects():
     try:
         res = supabase.table("projects").select("*").execute()
         raw = res.data or []
