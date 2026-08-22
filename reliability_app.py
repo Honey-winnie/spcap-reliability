@@ -229,7 +229,7 @@ if menu == "📌 提醒與逾期看板":
         st.info("未來 30 天內無排定任何取測項目。")
 
 # -----------------------------------------------------------------------------
-# 功能 2：投測總表與查詢 (含目前測試時數與完成進度)
+# 功能 2：投測總表與查詢 (預設依項目編號排序)
 # -----------------------------------------------------------------------------
 elif menu == "📋 投測總表與查詢":
     st.header("📋 投測項目總表")
@@ -251,7 +251,11 @@ elif menu == "📋 投測總表與查詢":
                         
             progress_pct = round((current_done_h / max_target_h * 100), 1) if max_target_h > 0 else 0
             
+            # 嘗試轉換編號為數字以便正確排序（避免 "10" 排在 "2" 前面）
+            sort_key = int(p_id) if str(p_id).isdigit() else p_id
+            
             table_rows.append({
+                'sort_key': sort_key,
                 'id': p['id'],
                 'owner': p['owner'],
                 'spec': p['spec'],
@@ -265,6 +269,10 @@ elif menu == "📋 投測總表與查詢":
             })
             
         df_projects = pd.DataFrame(table_rows)
+        
+        # 依據項目編號 (sort_key) 由小到大排序 (昇冪)
+        df_projects = df_projects.sort_values(by="sort_key", ascending=True).drop(columns=['sort_key'])
+        
         search_keyword = st.text_input("🔍 輸入關鍵字查詢 (規格/負責人/描述/批號)：", "")
         
         if search_keyword:
@@ -280,8 +288,8 @@ elif menu == "📋 投測總表與查詢":
         display_df = filtered_df[['id', 'owner', 'spec', 'condition', 'sample_size', 'current_hours', 'target_hours', 'progress', 'status', 'description']].copy()
         display_df.columns = ['項目編號', '負責人', '產品規格', '投測條件', '投測數量(顆)', '目前測試時數', '目標總時數', '完成進度', '狀態', '詳細描述']
         
+        st.caption("💡 提示：點擊表格上方任何欄位名稱（如：項目編號、完成進度...），即可切換正向或反向排序。")
         st.dataframe(display_df, use_container_width=True, hide_index=True)
-
 # -----------------------------------------------------------------------------
 # 功能 3：新增投測項目
 # -----------------------------------------------------------------------------
