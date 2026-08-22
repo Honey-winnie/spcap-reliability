@@ -33,24 +33,60 @@ if not check_password():
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 2. 連線 Supabase 雲端資料庫 (從 Secrets 讀取)
+# 功能 2：投測總表與查詢
 # -----------------------------------------------------------------------------
-supabase_url = st.secrets.get("SUPABASE_URL", "").strip()
-supabase_key = st.secrets.get("SUPABASE_KEY", "").strip()
+elif menu == "📋 投測總表與查詢":
+    st.header("📋 投測項目總表")
+    
+    if not projects_list:
+        st.warning("目前尚無任何投測項目。")
+    else:
+        # 計算各專案目前的測試進度
+        table_rows = []
+        for p in projects_list:
+            p_id = p['id']
+            sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
+            max_target_h = max(sorted_hours)
+            
+            # 抓取目前已上傳數據的最大時數
+            current_done_h = 0
+            if p_id in test_data_dict:
+                for h in sorted_hours:
+                    if f"{h}H" in test_data_dict[p_id]:
+                        current_done_h = h
+                        
+            progress_pct = round((current_done_h / max_target_h * 100), 1) if max_target_h > 0 else 0
+            
+            table_rows.append({
+                'id': p['id'],
+                'owner': p['owner'],
+                'spec': p['spec'],
+                'condition': p['condition'],
+                'sample_size': p['sample_size'],
+                'current_hours': f"{current_done_h}H",
+                'target_hours': f"{max_target_h}H",
+                'progress': f"{progress_pct}%",
+                'status': p['status'],
+                'description': p['description']
+            })
+            
+        df_projects = pd.DataFrame(table_rows)
+        search_keyword = st.text_input("🔍 輸入關鍵字查詢 (規格/負責人/描述/批號)：", "")
+        
+        if search_keyword:
+            filtered_df = df_projects[
+                df_projects['spec'].str.contains(search_keyword, case=False, na=False) |
+                df_projects['owner'].str.contains(search_keyword, case=False, na=False) |
+                df_projects['id'].str.contains(search_keyword, case=False, na=False) |
+                df_projects['description'].str.contains(search_keyword, case=False, na=False)
+            ]
+        else:
+            filtered_df = df_projects
 
-if not supabase_url or not supabase_key:
-    st.error("❌ 尚未讀取到 Supabase Secrets，請至 Streamlit 設定 SUPABASE_URL 與 SUPABASE_KEY！")
-    st.stop()
-
-@st.cache_resource
-def init_supabase() -> Client:
-    try:
-        return create_client(supabase_url, supabase_key)
-    except Exception as e:
-        st.error(f"⚠️ 雲端資料庫連線失敗，請檢查 URL 與 Key 設定：{e}")
-        st.stop()
-
-supabase = init_supabase()
+        display_df = filtered_df[['id', 'owner', 'spec', 'condition', 'sample_size', 'current_hours', 'target_hours', 'progress', 'status', 'description']].copy()
+        display_df.columns = ['項目編號', '負責人', '產品規格', '投測條件', '投測數量(顆)', '目前測試時數', '目標總時數', '完成進度', '狀態', '詳細描述']
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 # -----------------------------------------------------------------------------
 # 3. 資料庫讀取輔助函式
