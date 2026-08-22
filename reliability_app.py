@@ -128,6 +128,7 @@ menu = st.sidebar.radio("系統功能導覽", [
     "📌 提醒與逾期看板", 
     "📋 投測總表與查詢", 
     "➕ 新增投測項目", 
+    "✏️ 修改 / 刪除專案", 
     "📝 OP 數據填寫與變化率繪圖", 
     "📅 甘特圖排程檢視"
 ])
@@ -250,7 +251,7 @@ elif menu == "➕ 新增投測項目":
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        p_id = st.text_input("項目編號", value=str(datetime.now().strftime("%Y%m%d%H%M")))
+        p_id = st.text_input("項目編號 / 批號", value=str(datetime.now().strftime("%Y%m%d%H%M")))
         owner = st.text_input("產品負責人", value="Eric")
     with col2:
         spec = st.text_input("產品規格", value="ACLL2R0S561E03")
@@ -334,7 +335,95 @@ elif menu == "➕ 新增投測項目":
                 st.error(f"❌ 專案同步雲端失敗：{e}")
 
 # -----------------------------------------------------------------------------
-# 功能 4：OP 數據填寫與變化率繪圖
+# 功能 4：修改 / 刪除專案 (修正批號或專案資料)
+# -----------------------------------------------------------------------------
+elif menu == "✏️ 修改 / 刪除專案":
+    st.header("✏️ 修改 / 刪除專案資料")
+    
+    if not projects_list:
+        st.warning("目前尚無可編輯的專案。")
+    else:
+        project_ids = [p["id"] for p in projects_list]
+        selected_p_id = st.selectbox("請選擇要編輯的專案編號 / 批號：", project_ids)
+        target_project = next(p for p in projects_list if p["id"] == selected_p_id)
+
+        st.subheader(f"🛠️ 編輯專案：{selected_p_id}")
+        
+        with st.form("edit_project_form"):
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                new_id = st.text_input("專案編號 / 批號 (更正打錯的編號)", value=target_project["id"])
+                new_owner = st.text_input("負責工程師", value=target_project["owner"])
+                new_spec = st.text_input("產品規格", value=target_project["spec"])
+                new_status = st.selectbox("專案狀態", ["進行中", "已完成", "已暫停", "異常終止"], index=["進行中", "已完成", "已暫停", "異常終止"].index(target_project["status"]) if target_project["status"] in ["進行中", "已完成", "已暫停", "異常終止"] else 0)
+            
+            with col_e2:
+                new_sample_size = st.number_input("投測數量 (顆數)", min_value=1, max_value=100, value=target_project["sample_size"])
+                new_condition = st.text_input("投測條件", value=target_project["condition"])
+                new_start_time = st.text_input("投入時間 (YYYY-MM-DD HH:MM)", value=target_project["start_time"].strftime("%Y-%m-%d %H:%M"))
+                hours_str_val = ",".join(map(str, target_project["hours_list"]))
+                new_hours_list_str = st.text_input("取測時數列表 (逗號分隔)", value=hours_str_val)
+
+            new_desc = st.text_area("詳細描述", value=target_project["description"])
+            
+            submit_edit = st.form_submit_button("💾 儲存修改並更新雲端資料庫", type="primary")
+
+        if submit_edit:
+            try:
+                # 若修改了專案編號/批號，需同時更動 projects 與 test_data
+                if new_id != selected_p_id:
+                    # 1. 新增新 ID 的專案
+                    update_data = {
+                        "id": new_id,
+                        "owner": new_owner,
+                        "spec": new_spec,
+                        "sample_size": new_sample_size,
+                        "condition": new_condition,
+                        "status": new_status,
+                        "start_time": new_start_time,
+                        "hours_list": new_hours_list_str,
+                        "description": new_desc
+                    }
+                    supabase.table("projects").insert(update_data).execute()
+                    
+                    # 2. 更新現有測試數據的 project_id 關聯
+                    supabase.table("test_data").update({"project_id": new_id}).eq("project_id", selected_p_id).execute()
+                    
+                    # 3. 刪除舊 ID 專案
+                    supabase.table("projects").delete().eq("id", selected_p_id).execute()
+                else:
+                    # 未改 ID，直接更新專案內容
+                    update_data = {
+                        "owner": new_owner,
+                        "spec": new_spec,
+                        "sample_size": new_sample_size,
+                        "condition": new_condition,
+                        "status": new_status,
+                        "start_time": new_start_time,
+                        "hours_list": new_hours_list_str,
+                        "description": new_desc
+                    }
+                    supabase.table("projects").update(update_data).eq("id", selected_p_id).execute()
+
+                st.success("✅ 專案資料已成功修改！")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 修改失敗：{e}")
+
+        st.markdown("---")
+        st.subheader("⚠️ 危險操作區")
+        if st.button(f"🗑️ 徹底刪除專案 #{selected_p_id} (含所有測試數據)", type="secondary"):
+            try:
+                # 刪除 projects (受 CASCADE 影響或主動刪除 test_data)
+                supabase.table("test_data").delete().eq("project_id", selected_p_id).execute()
+                supabase.table("projects").delete().eq("id", selected_p_id).execute()
+                st.success(f"✅ 專案 #{selected_p_id} 及其測試數據已全部徹底刪除！")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 刪除專案失敗：{e}")
+
+# -----------------------------------------------------------------------------
+# 功能 5：OP 數據填寫與變化率繪圖
 # -----------------------------------------------------------------------------
 elif menu == "📝 OP 數據填寫與變化率繪圖":
     st.header("📝 OP 實測數據錄入與變化率趨勢圖")
@@ -486,7 +575,7 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
             st.info("💡 請先完成並上傳 **0H 數據**，系統將自動為您繪製 Cap/DF/ESR/LC 變化趨勢圖與統計表。")
 
 # -----------------------------------------------------------------------------
-# 功能 5：甘特圖排程檢視
+# 功能 6：甘特圖排程檢視
 # -----------------------------------------------------------------------------
 elif menu == "📅 甘特圖排程檢視":
     st.header("📅 信賴性投測甘特圖與時間軸")
