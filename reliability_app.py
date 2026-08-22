@@ -2,10 +2,22 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from dateutil import parser as date_parser
 import plotly.graph_objects as go
 import plotly.express as px
 from supabase import create_client, Client
+
+# -----------------------------------------------------------------------------
+# 0. 時區輔助函式
+# -----------------------------------------------------------------------------
+# 雲端主機 (例如 Streamlit Cloud) 的容器時區通常是 UTC，而不是台灣時間，
+# 若直接用 datetime.now()，在台灣時間 00:00~08:00 這段區間，系統認定的「今天」
+# 會比台灣實際日期少一天，導致「今日待取測」等以日期比對的功能失準。
+# 這裡統一改成明確以 Asia/Taipei 時區取得目前時間（再去掉 tzinfo，變回 naive
+# datetime，才能跟資料庫解析出來的 naive start_time 直接比較/相減）。
+def taipei_now() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Taipei")).replace(tzinfo=None)
 
 # -----------------------------------------------------------------------------
 # 1. 頁面配置與權限登入
@@ -81,7 +93,7 @@ def load_projects():
             
             start_parse_failed = start_dt is None
             if start_dt is None:
-                start_dt = datetime.now()
+                start_dt = taipei_now()
                 
             projects.append({
                 "id": str(r.get("id", "")),
@@ -156,7 +168,7 @@ menu = st.sidebar.radio("系統功能導覽", [
 # -----------------------------------------------------------------------------
 if menu == "📌 提醒與逾期看板":
     st.header("🔔 每日取測提醒與逾期追蹤")
-    now = datetime.now()
+    now = taipei_now()
     today_str = now.strftime("%Y-%m-%d")
     tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     
@@ -314,7 +326,7 @@ elif menu == "➕ 新增投測項目":
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        p_id = st.text_input("項目編號 / 批號", value=str(datetime.now().strftime("%Y%m%d%H%M")))
+        p_id = st.text_input("項目編號 / 批號", value=str(taipei_now().strftime("%Y%m%d%H%M")))
         owner = st.text_input("產品負責人", value="Eric")
     with col2:
         spec = st.text_input("產品規格", value="ACLL2R0S561E03")
@@ -419,7 +431,7 @@ elif menu == "✏️ 修改 / 刪除專案":
                     "下面顯示的是暫代用的目前時間，並非資料庫實際存的值！"
                     "請重新設定正確的投入日期/時間並儲存一次即可修復。"
                 )
-            init_start = target_p['start_time'] if isinstance(target_p['start_time'], datetime) else datetime.now()
+            init_start = target_p['start_time'] if isinstance(target_p['start_time'], datetime) else taipei_now()
 
             # 【修正重點 1】
             # Streamlit 有個常見陷阱：widget 的 key 一旦建立過，之後每次重新執行(包含 st.rerun()
@@ -559,7 +571,7 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
             if (edited_df["Cap (uF)"] <= 0).any() or (edited_df["ESR (mΩ)"] <= 0).any():
                 st.error("⚠️ 發現電容值或 ESR 包含 <= 0 的異常數據，請確認後重新儲存！")
             else:
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                now_str = taipei_now().strftime("%Y-%m-%d %H:%M:%S")
                 rows = []
                 for _, r in edited_df.iterrows():
                     rows.append({
