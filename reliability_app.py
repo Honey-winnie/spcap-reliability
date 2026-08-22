@@ -33,60 +33,24 @@ if not check_password():
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 功能 2：投測總表與查詢
+# 2. 連線 Supabase 雲端資料庫 (從 Secrets 讀取)
 # -----------------------------------------------------------------------------
-elif menu == "📋 投測總表與查詢":
-    st.header("📋 投測項目總表")
-    
-    if not projects_list:
-        st.warning("目前尚無任何投測項目。")
-    else:
-        # 計算各專案目前的測試進度
-        table_rows = []
-        for p in projects_list:
-            p_id = p['id']
-            sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
-            max_target_h = max(sorted_hours)
-            
-            # 抓取目前已上傳數據的最大時數
-            current_done_h = 0
-            if p_id in test_data_dict:
-                for h in sorted_hours:
-                    if f"{h}H" in test_data_dict[p_id]:
-                        current_done_h = h
-                        
-            progress_pct = round((current_done_h / max_target_h * 100), 1) if max_target_h > 0 else 0
-            
-            table_rows.append({
-                'id': p['id'],
-                'owner': p['owner'],
-                'spec': p['spec'],
-                'condition': p['condition'],
-                'sample_size': p['sample_size'],
-                'current_hours': f"{current_done_h}H",
-                'target_hours': f"{max_target_h}H",
-                'progress': f"{progress_pct}%",
-                'status': p['status'],
-                'description': p['description']
-            })
-            
-        df_projects = pd.DataFrame(table_rows)
-        search_keyword = st.text_input("🔍 輸入關鍵字查詢 (規格/負責人/描述/批號)：", "")
-        
-        if search_keyword:
-            filtered_df = df_projects[
-                df_projects['spec'].str.contains(search_keyword, case=False, na=False) |
-                df_projects['owner'].str.contains(search_keyword, case=False, na=False) |
-                df_projects['id'].str.contains(search_keyword, case=False, na=False) |
-                df_projects['description'].str.contains(search_keyword, case=False, na=False)
-            ]
-        else:
-            filtered_df = df_projects
+supabase_url = st.secrets.get("SUPABASE_URL", "").strip()
+supabase_key = st.secrets.get("SUPABASE_KEY", "").strip()
 
-        display_df = filtered_df[['id', 'owner', 'spec', 'condition', 'sample_size', 'current_hours', 'target_hours', 'progress', 'status', 'description']].copy()
-        display_df.columns = ['項目編號', '負責人', '產品規格', '投測條件', '投測數量(顆)', '目前測試時數', '目標總時數', '完成進度', '狀態', '詳細描述']
-        
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+if not supabase_url or not supabase_key:
+    st.error("❌ 尚未讀取到 Supabase Secrets，請至 Streamlit 設定 SUPABASE_URL 與 SUPABASE_KEY！")
+    st.stop()
+
+@st.cache_resource
+def init_supabase() -> Client:
+    try:
+        return create_client(supabase_url, supabase_key)
+    except Exception as e:
+        st.error(f"⚠️ 雲端資料庫連線失敗，請檢查 URL 與 Key 設定：{e}")
+        st.stop()
+
+supabase = init_supabase()
 
 # -----------------------------------------------------------------------------
 # 3. 資料庫讀取輔助函式
@@ -265,7 +229,7 @@ if menu == "📌 提醒與逾期看板":
         st.info("未來 30 天內無排定任何取測項目。")
 
 # -----------------------------------------------------------------------------
-# 功能 2：投測總表與查詢
+# 功能 2：投測總表與查詢 (含目前測試時數與完成進度)
 # -----------------------------------------------------------------------------
 elif menu == "📋 投測總表與查詢":
     st.header("📋 投測項目總表")
@@ -273,20 +237,49 @@ elif menu == "📋 投測總表與查詢":
     if not projects_list:
         st.warning("目前尚無任何投測項目。")
     else:
-        df_projects = pd.DataFrame(projects_list)
-        search_keyword = st.text_input("🔍 輸入關鍵字查詢 (規格/負責人/描述)：", "")
+        table_rows = []
+        for p in projects_list:
+            p_id = p['id']
+            sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
+            max_target_h = max(sorted_hours)
+            
+            current_done_h = 0
+            if p_id in test_data_dict:
+                for h in sorted_hours:
+                    if f"{h}H" in test_data_dict[p_id]:
+                        current_done_h = h
+                        
+            progress_pct = round((current_done_h / max_target_h * 100), 1) if max_target_h > 0 else 0
+            
+            table_rows.append({
+                'id': p['id'],
+                'owner': p['owner'],
+                'spec': p['spec'],
+                'condition': p['condition'],
+                'sample_size': p['sample_size'],
+                'current_hours': f"{current_done_h}H",
+                'target_hours': f"{max_target_h}H",
+                'progress': f"{progress_pct}%",
+                'status': p['status'],
+                'description': p['description']
+            })
+            
+        df_projects = pd.DataFrame(table_rows)
+        search_keyword = st.text_input("🔍 輸入關鍵字查詢 (規格/負責人/描述/批號)：", "")
         
         if search_keyword:
             filtered_df = df_projects[
                 df_projects['spec'].str.contains(search_keyword, case=False, na=False) |
                 df_projects['owner'].str.contains(search_keyword, case=False, na=False) |
+                df_projects['id'].str.contains(search_keyword, case=False, na=False) |
                 df_projects['description'].str.contains(search_keyword, case=False, na=False)
             ]
         else:
             filtered_df = df_projects
 
-        display_df = filtered_df[['id', 'owner', 'spec', 'condition', 'sample_size', 'target_hours', 'status', 'description']].copy()
-        display_df.columns = ['項目編號', '負責人', '產品規格', '投測條件', '投測數量(顆)', '目標時數', '狀態', '詳細描述']
+        display_df = filtered_df[['id', 'owner', 'spec', 'condition', 'sample_size', 'current_hours', 'target_hours', 'progress', 'status', 'description']].copy()
+        display_df.columns = ['項目編號', '負責人', '產品規格', '投測條件', '投測數量(顆)', '目前測試時數', '目標總時數', '完成進度', '狀態', '詳細描述']
+        
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 # -----------------------------------------------------------------------------
@@ -381,7 +374,7 @@ elif menu == "➕ 新增投測項目":
                 st.error(f"❌ 專案同步雲端失敗：{e}")
 
 # -----------------------------------------------------------------------------
-# 功能 4：修改 / 刪除專案 (修正批號或專案資料)
+# 功能 4：修改 / 刪除專案
 # -----------------------------------------------------------------------------
 elif menu == "✏️ 修改 / 刪除專案":
     st.header("✏️ 修改 / 刪除專案資料")
@@ -613,7 +606,7 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
             st.info("💡 請先完成並上傳 **0H 數據**，系統將自動為您繪製 Cap/DF/ESR/LC 變化趨勢圖與統計表。")
 
 # -----------------------------------------------------------------------------
-# 功能 6：跨批號電性數據比較 (新增功能)
+# 功能 6：跨批號電性數據比較
 # -----------------------------------------------------------------------------
 elif menu == "📊 跨批號電性數據比較":
     st.header("📊 多批號 / 實驗組電性平均值對比分析")
@@ -621,7 +614,6 @@ elif menu == "📊 跨批號電性數據比較":
     if not projects_list:
         st.warning("目前尚無投測項目可供比較。")
     else:
-        # 篩選出擁有至少 0H 數據的專案
         valid_projects = [p for p in projects_list if (p['id'] in test_data_dict) and ("0H" in test_data_dict[p['id']])]
         
         if not valid_projects:
@@ -647,7 +639,6 @@ elif menu == "📊 跨批號電性數據比較":
                     "💧 平均 LC (uA)"
                 ])
 
-                # 1. 電容平均變化率對比
                 with tab_comp_cap:
                     fig_comp_cap = go.Figure()
                     table_rows = []
@@ -684,7 +675,6 @@ elif menu == "📊 跨批號電性數據比較":
                     st.plotly_chart(fig_comp_cap, use_container_width=True)
                     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-                # 2. ESR 平均變化率對比
                 with tab_comp_esr:
                     fig_comp_esr = go.Figure()
                     table_rows_esr = []
@@ -721,7 +711,6 @@ elif menu == "📊 跨批號電性數據比較":
                     st.plotly_chart(fig_comp_esr, use_container_width=True)
                     st.dataframe(pd.DataFrame(table_rows_esr), use_container_width=True, hide_index=True)
 
-                # 3. DF 平均值對比
                 with tab_comp_df:
                     fig_comp_df = go.Figure()
                     table_rows_df = []
@@ -752,7 +741,6 @@ elif menu == "📊 跨批號電性數據比較":
                     st.plotly_chart(fig_comp_df, use_container_width=True)
                     st.dataframe(pd.DataFrame(table_rows_df), use_container_width=True, hide_index=True)
 
-                # 4. LC 平均值對比
                 with tab_comp_lc:
                     fig_comp_lc = go.Figure()
                     table_rows_lc = []
@@ -784,7 +772,7 @@ elif menu == "📊 跨批號電性數據比較":
                     st.dataframe(pd.DataFrame(table_rows_lc), use_container_width=True, hide_index=True)
 
 # -----------------------------------------------------------------------------
-# 功能 7：甘特圖排程檢視
+# 功能 7：甘特圖排程檢視 (多色色階與完成進度表)
 # -----------------------------------------------------------------------------
 elif menu == "📅 甘特圖排程檢視":
     st.header("📅 信賴性投測甘特圖與時間軸")
@@ -798,10 +786,9 @@ elif menu == "📅 甘特圖排程檢視":
         for p in projects_list:
             p_id = p['id']
             start = p['start_time']
-            sorted_hours = sorted(p['hours_list'])
-            max_target_h = max(sorted_hours) if sorted_hours else 0
+            sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
+            max_target_h = max(sorted_hours)
             
-            # 1. 計算當前已完成的最高時數與進度百分比
             current_done_h = 0
             if p_id in test_data_dict:
                 for h in sorted_hours:
@@ -820,7 +807,6 @@ elif menu == "📅 甘特圖排程檢視":
                 "完成百分比": f"{progress_pct}%"
             }
             
-            # 2. 分段甘特圖區塊（恢復多色色階，不再互相覆蓋）
             prev_time = start
             for h in sorted_hours:
                 target_dt = start + timedelta(hours=h)
@@ -833,7 +819,7 @@ elif menu == "📅 甘特圖排程檢視":
                     "Owner": p['owner'],
                     "預計取測時間": target_dt.strftime('%Y-%m-%d %H:%M')
                 })
-                prev_time = target_dt  # 推進至下一段起點
+                prev_time = target_dt
                 
                 row_detail[f"{h}H 取測時間"] = target_dt.strftime('%m/%d %H:%M')
                 
@@ -841,7 +827,6 @@ elif menu == "📅 甘特圖排程檢視":
                 
         df_gantt = pd.DataFrame(gantt_data)
         
-        # 繪製多色彩色甘特圖
         fig_gantt = px.timeline(
             df_gantt, 
             x_start="Start", 
@@ -864,7 +849,6 @@ elif menu == "📅 甘特圖排程檢視":
 
         st.markdown("---")
         
-        # 下方對照總表（新增進度百分比）
         st.subheader("📋 各專案取測時間與進度對照總表")
         st.caption("💡 包含目標總時數、已完成最高時數與自動計算之完成百分比（%）：")
         
