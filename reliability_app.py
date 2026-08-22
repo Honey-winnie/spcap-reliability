@@ -760,39 +760,52 @@ elif menu == "📅 甘特圖排程檢視":
         timetable_data = []
         
         for p in projects_list:
+            p_id = p['id']
             start = p['start_time']
+            sorted_hours = sorted(p['hours_list'])
+            max_target_h = max(sorted_hours) if sorted_hours else 0
+            
+            # 1. 計算當前已完成的最高時數與進度百分比
+            current_done_h = 0
+            if p_id in test_data_dict:
+                for h in sorted_hours:
+                    if f"{h}H" in test_data_dict[p_id]:
+                        current_done_h = h
+                        
+            progress_pct = round((current_done_h / max_target_h * 100), 1) if max_target_h > 0 else 0
             
             row_detail = {
                 "專案編號": p['id'],
                 "負責人": p['owner'],
                 "產品規格": p['spec'],
-                "投入時間": start.strftime('%Y-%m-%d %H:%M')
+                "投入時間": start.strftime('%Y-%m-%d %H:%M'),
+                "目標總時數": f"{max_target_h}H",
+                "已完成時數": f"{current_done_h}H",
+                "完成百分比": f"{progress_pct}%"
             }
             
-            # 確保時數由小到大排序
-            sorted_hours = sorted(p['hours_list'])
-            
+            # 2. 分段甘特圖區塊（恢復多色色階，不再互相覆蓋）
+            prev_time = start
             for h in sorted_hours:
-                # 正確計算：所有時數都是從投入時間 (0H) 開始累加
                 target_dt = start + timedelta(hours=h)
                 
-                # 甘特圖資料：從 0H 延伸至 target_dt
                 gantt_data.append({
                     "Task": f"#{p['id']} ({p['spec']})",
-                    "Start": start,
+                    "Start": prev_time,
                     "Finish": target_dt,
                     "Stage": f"{h}H 取測",
                     "Owner": p['owner'],
                     "預計取測時間": target_dt.strftime('%Y-%m-%d %H:%M')
                 })
+                prev_time = target_dt  # 推進至下一段起點
                 
-                # 下方總表直接記錄正確對應時間
                 row_detail[f"{h}H 取測時間"] = target_dt.strftime('%m/%d %H:%M')
                 
             timetable_data.append(row_detail)
                 
         df_gantt = pd.DataFrame(gantt_data)
         
+        # 繪製多色彩色甘特圖
         fig_gantt = px.timeline(
             df_gantt, 
             x_start="Start", 
@@ -815,8 +828,9 @@ elif menu == "📅 甘特圖排程檢視":
 
         st.markdown("---")
         
-        st.subheader("📋 各專案取測時間對照總表")
-        st.caption("💡 以下直觀列出每個專案在各個取測時間點（HR）對應的精確日期與時間：")
+        # 下方對照總表（新增進度百分比）
+        st.subheader("📋 各專案取測時間與進度對照總表")
+        st.caption("💡 包含目標總時數、已完成最高時數與自動計算之完成百分比（%）：")
         
         df_timetable = pd.DataFrame(timetable_data)
         st.dataframe(df_timetable, use_container_width=True, hide_index=True)
