@@ -55,16 +55,25 @@ supabase = init_supabase()
 # -----------------------------------------------------------------------------
 # 3. 資料庫讀取輔助函式
 # -----------------------------------------------------------------------------
-def load_projects():
+ddef load_projects():
     try:
         res = supabase.table("projects").select("*").execute()
         raw = res.data or []
         projects = []
         for r in raw:
             hours = [int(h.strip()) for h in str(r.get("hours_list", "")).split(",") if h.strip().isdigit()]
-            try:
-                start_dt = datetime.strptime(str(r.get("start_time", "")), "%Y-%m-%d %H:%M")
-            except:
+            
+            # 多重格式相容解析，避免時間格式解析失敗被 reset 為當前時間
+            start_str = str(r.get("start_time", "")).strip()
+            start_dt = None
+            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
+                try:
+                    start_dt = datetime.strptime(start_str, fmt)
+                    break
+                except ValueError:
+                    continue
+            
+            if start_dt is None:
                 start_dt = datetime.now()
                 
             projects.append({
@@ -752,7 +761,6 @@ elif menu == "📅 甘特圖排程檢視":
         
         for p in projects_list:
             start = p['start_time']
-            prev_time = start
             
             row_detail = {
                 "專案編號": p['id'],
@@ -761,18 +769,24 @@ elif menu == "📅 甘特圖排程檢視":
                 "投入時間": start.strftime('%Y-%m-%d %H:%M')
             }
             
-            for h in p['hours_list']:
+            # 確保時數由小到大排序
+            sorted_hours = sorted(p['hours_list'])
+            
+            for h in sorted_hours:
+                # 正確計算：所有時數都是從投入時間 (0H) 開始累加
                 target_dt = start + timedelta(hours=h)
                 
+                # 甘特圖資料：從 0H 延伸至 target_dt
                 gantt_data.append({
                     "Task": f"#{p['id']} ({p['spec']})",
-                    "Start": prev_time,
+                    "Start": start,
                     "Finish": target_dt,
                     "Stage": f"{h}H 取測",
                     "Owner": p['owner'],
                     "預計取測時間": target_dt.strftime('%Y-%m-%d %H:%M')
                 })
-                prev_time = target_dt
+                
+                # 下方總表直接記錄正確對應時間
                 row_detail[f"{h}H 取測時間"] = target_dt.strftime('%m/%d %H:%M')
                 
             timetable_data.append(row_detail)
