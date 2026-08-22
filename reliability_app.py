@@ -63,12 +63,12 @@ def load_projects():
         for r in raw:
             hours = [int(h.strip()) for h in str(r.get("hours_list", "")).split(",") if h.strip().isdigit()]
             
-            # 多重格式相容解析，避免時間格式解析失敗被 reset 為當前時間
-            start_str = str(r.get("start_time", "")).strip()
+            # 精準解析投入時間，避免被錯誤重置為當前時間
+            start_str = str(r.get("start_time", "")).replace("T", " ").strip()
             start_dt = None
-            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
+            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
                 try:
-                    start_dt = datetime.strptime(start_str, fmt)
+                    start_dt = datetime.strptime(start_str.split(".")[0], fmt)
                     break
                 except ValueError:
                     continue
