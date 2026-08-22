@@ -390,7 +390,7 @@ elif menu == "➕ 新增投測項目":
                 st.error(f"❌ 專案同步雲端失敗：{e}")
 
 # -----------------------------------------------------------------------------
-# 功能 4：修改 / 刪除專案 (修正儲存後記憶體未更新問題)
+# 功能 4：修改 / 刪除專案 (修正日期被自動還原與 Key 快取問題)
 # -----------------------------------------------------------------------------
 elif menu == "✏️ 修改 / 刪除專案":
     st.header("✏️ 修改 / 刪除既有投測專案")
@@ -399,13 +399,15 @@ elif menu == "✏️ 修改 / 刪除專案":
         st.info("目前尚無任何可修改的專案。")
     else:
         project_ids = [p['id'] for p in projects_list]
-        selected_id = st.selectbox("請選擇要編輯的專案編號：", project_ids)
+        selected_id = st.selectbox("請選擇要編輯的專案編號：", project_ids, key="edit_select_id")
         
         target_p = next((p for p in projects_list if p['id'] == selected_id), None)
         
         if target_p:
             st.divider()
-            with st.form("edit_project_form"):
+            init_start = target_p['start_time'] if isinstance(target_p['start_time'], datetime) else datetime.now()
+            
+            with st.form(key=f"edit_form_{selected_id}"):
                 st.subheader(f"正在編輯專案：#{target_p['id']}")
                 
                 edit_owner = st.text_input("負責人：", value=target_p['owner'])
@@ -413,10 +415,9 @@ elif menu == "✏️ 修改 / 刪除專案":
                 edit_sample_size = st.number_input("投測數量 (顆)：", min_value=1, value=target_p['sample_size'])
                 edit_condition = st.text_input("投測條件：", value=target_p['condition'])
                 
-                # 投入時間編輯
-                init_start = target_p['start_time'] if isinstance(target_p['start_time'], datetime) else datetime.now()
-                edit_start_date = st.date_input("投入日期：", value=init_start.date())
-                edit_start_time = st.time_input("投入時間：", value=init_start.time())
+                # 指定獨立 key，避免選取的日期/時間被 Streamlit 重置
+                edit_start_date = st.date_input("投入日期：", value=init_start.date(), key=f"d_input_{selected_id}")
+                edit_start_time = st.time_input("投入時間：", value=init_start.time(), key=f"t_input_{selected_id}")
                 
                 hours_str_init = ", ".join([str(h) for h in target_p['hours_list']])
                 edit_hours_str = st.text_input("測試時數節點 (以逗號分隔)：", value=hours_str_init)
@@ -450,12 +451,8 @@ elif menu == "✏️ 修改 / 刪除專案":
                             
                             supabase.table("projects").update(update_data).eq("id", selected_id).execute()
                             
-                            # 清除 session_state 快取，確保全新載入
-                            if 'projects' in st.session_state:
-                                del st.session_state['projects']
-                                
-                            st.success(f"✅ 專案 #{selected_id} 資料已成功更新！系統即將自動刷新...")
-                            st.rerun()  # 強制頁面重新載入並向 Supabase 重新拉取資料
+                            st.success(f"✅ 專案 #{selected_id} 投入時間已更新為：{combined_start.strftime('%Y-%m-%d %H:%M')}！系統即將刷新...")
+                            st.rerun()
                     except Exception as e:
                         st.error(f"❌ 更新失敗：{e}")
             
@@ -463,16 +460,12 @@ elif menu == "✏️ 修改 / 刪除專案":
             st.subheader("🗑️ 刪除專案")
             st.caption("⚠️ 警告：刪除專案將一併移除雲端資料庫中該專案的所有測試數據，無法復原！")
             
-            confirm_del = st.checkbox(f"我確定要永久刪除專案 #{selected_id}")
-            if st.button("❌ 確認刪除專案", type="primary", disabled=not confirm_del):
+            confirm_del = st.checkbox(f"我確定要永久刪除專案 #{selected_id}", key=f"del_chk_{selected_id}")
+            if st.button("❌ 確認刪除專案", type="primary", disabled=not confirm_del, key=f"del_btn_{selected_id}"):
                 try:
-                    # 先刪除關聯數據再刪專案
                     supabase.table("test_data").delete().eq("project_id", selected_id).execute()
                     supabase.table("projects").delete().eq("id", selected_id).execute()
                     
-                    if 'projects' in st.session_state:
-                        del st.session_state['projects']
-                        
                     st.success(f"🗑️ 專案 #{selected_id} 已完全刪除！")
                     st.rerun()
                 except Exception as e:
