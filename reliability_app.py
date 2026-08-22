@@ -595,12 +595,31 @@ elif menu == "📅 甘特圖排程檢視":
                     "Finish": target_dt,
                     "Stage": f"{h}H 取測",
                     "Owner": p['owner'],
-                    "區間標籤": f"{h}H ({target_dt.strftime('%m/%d %H:%M')})"
+                    "預計取測時間": target_dt.strftime('%Y-%m-%d %H:%M')
                 })
                 prev_time = target_dt
                 
         df_gantt = pd.DataFrame(gantt_data)
-        fig_gantt = px.timeline(df_gantt, x_start="Start", x_end="Finish", y="Task", color="Stage", text="區間標籤", title="投測項目時間軸甘特圖")
+        
+        # 移除區塊內擠壓的文字，改放到 Hover 提示框中
+        fig_gantt = px.timeline(
+            df_gantt, 
+            x_start="Start", 
+            x_end="Finish", 
+            y="Task", 
+            color="Stage", 
+            hover_data=["Owner", "預計取測時間"],
+            title="投測項目時間軸甘特圖"
+        )
+        
+        # 動態計算圖表高度（避免專案多時擠壓），改善排列
+        calc_height = max(350, len(projects_list) * 80)
+        
         fig_gantt.update_yaxes(autorange="reversed")
-        fig_gantt.update_layout(height=400, xaxis_title="時間", yaxis_title="投測專案")
+        fig_gantt.update_layout(
+            height=calc_height, 
+            xaxis_title="時間 (Date/Time)", 
+            yaxis_title="投測專案",
+            hoverlabel=dict(bgcolor="white", font_size=13)
+        )
         st.plotly_chart(fig_gantt, use_container_width=True)
