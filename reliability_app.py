@@ -144,7 +144,7 @@ menu = st.sidebar.radio("系統功能導覽", [
 ])
 
 # -----------------------------------------------------------------------------
-# 功能 1：提醒與逾期看板
+# 功能 1：提醒與逾期看板 (修正歷史日期過濾問題，完整顯示取測排程)
 # -----------------------------------------------------------------------------
 if menu == "📌 提醒與逾期看板":
     st.header("🔔 每日取測提醒與逾期追蹤")
@@ -156,6 +156,9 @@ if menu == "📌 提醒與逾期看板":
     
     alerts = []
     month_schedule = []
+    
+    # 涵蓋過去 14 天至未來 30 天，確保已完成或過期的 72H 也能正常顯示
+    past_14_days = now - timedelta(days=14)
     future_30_days = now + timedelta(days=30)
     
     for p in projects_list:
@@ -169,8 +172,11 @@ if menu == "📌 提醒與逾期看板":
             
             has_data = (p_id in test_data_dict) and (hour_key in test_data_dict[p_id])
             
-            if now.date() <= target_dt.date() <= future_30_days.date():
+            # 只要在顯示區間內（含過去 14 天）就放進日程表
+            if past_14_days.date() <= target_dt.date() <= future_30_days.date():
+                sort_p_id = int(p_id) if str(p_id).isdigit() else p_id
                 month_schedule.append({
+                    "sort_p_id": sort_p_id,
                     "取測日期": target_dt.strftime("%Y-%m-%d"),
                     "預計時間": target_dt.strftime("%H:%M"),
                     "項目編號": p['id'],
@@ -178,7 +184,7 @@ if menu == "📌 提醒與逾期看板":
                     "產品規格": p['spec'],
                     "投測條件": p['condition'],
                     "取測時數": hour_key,
-                    "狀態": "✅ 已完成" if has_data else "⏳ 待取測"
+                    "狀態": "✅ 已完成" if has_data else ("🔴 逾期未完成" if target_dt < now else "⏳ 待取測")
                 })
 
             if has_data:
@@ -221,12 +227,14 @@ if menu == "📌 提醒與逾期看板":
         st.info("今日無預計取測項目。")
 
     st.markdown("---")
-    st.subheader("📅 近一個月 (未來 30 天) 取測日程表")
+    st.subheader("📅 近一個月取測日程表 (包含過往與未來排程)")
     if month_schedule:
-        df_month = pd.DataFrame(month_schedule).sort_values(by=["取測日期", "預計時間"]).reset_index(drop=True)
+        df_month = pd.DataFrame(month_schedule)
+        # 先按取測日期、預計時間排序，再按項目編號排序
+        df_month = df_month.sort_values(by=["取測日期", "預計時間", "sort_p_id"]).drop(columns=["sort_p_id"]).reset_index(drop=True)
         st.dataframe(df_month, use_container_width=True, hide_index=True)
     else:
-        st.info("未來 30 天內無排定任何取測項目。")
+        st.info("近一個月內無排定任何取測項目。")
 
 # -----------------------------------------------------------------------------
 # 功能 2：投測總表與查詢 (預設依項目編號排序)
