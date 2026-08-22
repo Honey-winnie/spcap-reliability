@@ -33,16 +33,19 @@ if not check_password():
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 2. 連線 Supabase 免費雲端資料庫
+# 2. 連線 Supabase 雲端資料庫 (從 Secrets 讀取)
 # -----------------------------------------------------------------------------
-# 💡 請將下方的 SUPABASE_KEY 替換為您剛複製的 Publishable key (sb_publishable_...)
-SUPABASE_URL = "https://utufnlpewpjiqckpved.supabase.co"
-SUPABASE_KEY = "sb_publishable_ONoS43hUt46-V51WD9QKXA_pnmUpA0h"
+supabase_url = st.secrets.get("SUPABASE_URL", "").strip()
+supabase_key = st.secrets.get("SUPABASE_KEY", "").strip()
+
+if not supabase_url or not supabase_key:
+    st.error("❌ 尚未讀取到 Supabase Secrets，請至 Streamlit 設定 SUPABASE_URL 與 SUPABASE_KEY！")
+    st.stop()
 
 @st.cache_resource
 def init_supabase() -> Client:
     try:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+        return create_client(supabase_url, supabase_key)
     except Exception as e:
         st.error(f"⚠️ 雲端資料庫連線失敗，請檢查 URL 與 Key 設定：{e}")
         st.stop()
@@ -55,7 +58,7 @@ supabase = init_supabase()
 def load_projects():
     try:
         res = supabase.table("projects").select("*").execute()
-        raw = res.data
+        raw = res.data or []
         projects = []
         for r in raw:
             hours = [int(h.strip()) for h in str(r.get("hours_list", "")).split(",") if h.strip().isdigit()]
@@ -77,13 +80,14 @@ def load_projects():
                 "description": str(r.get("description", ""))
             })
         return projects
-    except Exception:
+    except Exception as e:
+        st.sidebar.error(f"⚠️ 專案列表讀取異常：{e}")
         return []
 
 def load_testdata():
     try:
         res = supabase.table("test_data").select("*").execute()
-        raw = res.data
+        raw = res.data or []
         test_data = {}
         for r in raw:
             p_id = str(r.get("project_id", ""))
@@ -107,7 +111,8 @@ def load_testdata():
                 test_data[p_id][hour] = pd.DataFrame(test_data[p_id][hour])
                 
         return test_data
-    except Exception:
+    except Exception as e:
+        st.sidebar.error(f"⚠️ 測試數據讀取異常：{e}")
         return {}
 
 projects_list = load_projects()
@@ -321,9 +326,12 @@ elif menu == "➕ 新增投測項目":
                 "hours_list": hours_str,
                 "description": formatted_desc
             }
-            supabase.table("projects").upsert(data).execute()
-            st.success(f"已成功建立專案 #{p_id} 並同步至雲端！")
-            st.rerun()
+            try:
+                supabase.table("projects").upsert(data).execute()
+                st.success(f"✅ 已成功建立專案 #{p_id} 並同步至雲端！")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 專案同步雲端失敗：{e}")
 
 # -----------------------------------------------------------------------------
 # 功能 4：OP 數據填寫與變化率繪圖
@@ -381,9 +389,12 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
                         "lc": float(r["LC (uA)"]),
                         "update_time": now_str
                     })
-                supabase.table("test_data").upsert(rows).execute()
-                st.success(f"✅ 成功！已同步 #{selected_id} 在 {selected_hour} 的數據至雲端！")
-                st.rerun()
+                try:
+                    supabase.table("test_data").upsert(rows).execute()
+                    st.success(f"✅ 成功！已同步 #{selected_id} 在 {selected_hour} 的數據至雲端！")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 測試數據同步失敗：{e}")
 
         st.markdown("---")
         st.subheader("📈 信賴性變化率趨勢圖與統計 (主管 / 工程師檢視區)")
