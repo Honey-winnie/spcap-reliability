@@ -382,84 +382,93 @@ elif menu == "➕ 新增投測項目":
                 st.error(f"❌ 專案同步雲端失敗：{e}")
 
 # -----------------------------------------------------------------------------
-# 功能 4：修改 / 刪除專案
+# 功能 4：修改 / 刪除專案 (修正儲存後記憶體未更新問題)
 # -----------------------------------------------------------------------------
 elif menu == "✏️ 修改 / 刪除專案":
-    st.header("✏️ 修改 / 刪除專案資料")
+    st.header("✏️ 修改 / 刪除既有投測專案")
     
     if not projects_list:
-        st.warning("目前尚無可編輯的專案。")
+        st.info("目前尚無任何可修改的專案。")
     else:
-        project_ids = [p["id"] for p in projects_list]
-        selected_p_id = st.selectbox("請選擇要編輯的專案編號 / 批號：", project_ids)
-        target_project = next(p for p in projects_list if p["id"] == selected_p_id)
-
-        st.subheader(f"🛠️ 編輯專案：{selected_p_id}")
+        project_ids = [p['id'] for p in projects_list]
+        selected_id = st.selectbox("請選擇要編輯的專案編號：", project_ids)
         
-        with st.form("edit_project_form"):
-            col_e1, col_e2 = st.columns(2)
-            with col_e1:
-                new_id = st.text_input("專案編號 / 批號 (更正打錯的編號)", value=target_project["id"])
-                new_owner = st.text_input("負責工程師", value=target_project["owner"])
-                new_spec = st.text_input("產品規格", value=target_project["spec"])
-                new_status = st.selectbox("專案狀態", ["進行中", "已完成", "已暫停", "異常終止"], index=["進行中", "已完成", "已暫停", "異常終止"].index(target_project["status"]) if target_project["status"] in ["進行中", "已完成", "已暫停", "異常終止"] else 0)
+        target_p = next((p for p in projects_list if p['id'] == selected_id), None)
+        
+        if target_p:
+            st.divider()
+            with st.form("edit_project_form"):
+                st.subheader(f"正在編輯專案：#{target_p['id']}")
+                
+                edit_owner = st.text_input("負責人：", value=target_p['owner'])
+                edit_spec = st.text_input("產品規格：", value=target_p['spec'])
+                edit_sample_size = st.number_input("投測數量 (顆)：", min_value=1, value=target_p['sample_size'])
+                edit_condition = st.text_input("投測條件：", value=target_p['condition'])
+                
+                # 投入時間編輯
+                init_start = target_p['start_time'] if isinstance(target_p['start_time'], datetime) else datetime.now()
+                edit_start_date = st.date_input("投入日期：", value=init_start.date())
+                edit_start_time = st.time_input("投入時間：", value=init_start.time())
+                
+                hours_str_init = ", ".join([str(h) for h in target_p['hours_list']])
+                edit_hours_str = st.text_input("測試時數節點 (以逗號分隔)：", value=hours_str_init)
+                
+                status_options = ["進行中", "已完成", "已暫停", "異常終止"]
+                status_index = status_options.index(target_p['status']) if target_p['status'] in status_options else 0
+                edit_status = st.selectbox("專案狀態：", status_options, index=status_index)
+                
+                edit_description = st.text_area("詳細描述 / 備註：", value=target_p['description'])
+                
+                btn_update = st.form_submit_button("💾 儲存修改並更新雲端資料庫", use_container_width=True)
+                
+                if btn_update:
+                    try:
+                        parsed_hours = [int(h.strip()) for h in edit_hours_str.replace("，", ",").split(",") if h.strip().isdigit()]
+                        if not parsed_hours:
+                            st.error("❌ 請至少輸入一個有效的時數節點！")
+                        else:
+                            combined_start = datetime.combine(edit_start_date, edit_start_time)
+                            
+                            update_data = {
+                                "owner": edit_owner,
+                                "spec": edit_spec,
+                                "sample_size": edit_sample_size,
+                                "condition": edit_condition,
+                                "start_time": combined_start.strftime("%Y-%m-%d %H:%M:%S"),
+                                "hours_list": ",".join(map(str, parsed_hours)),
+                                "status": edit_status,
+                                "description": edit_description
+                            }
+                            
+                            supabase.table("projects").update(update_data).eq("id", selected_id).execute()
+                            
+                            # 清除 session_state 快取，確保全新載入
+                            if 'projects' in st.session_state:
+                                del st.session_state['projects']
+                                
+                            st.success(f"✅ 專案 #{selected_id} 資料已成功更新！系統即將自動刷新...")
+                            st.rerun()  # 強制頁面重新載入並向 Supabase 重新拉取資料
+                    except Exception as e:
+                        st.error(f"❌ 更新失敗：{e}")
             
-            with col_e2:
-                new_sample_size = st.number_input("投測數量 (顆數)", min_value=1, max_value=100, value=target_project["sample_size"])
-                new_condition = st.text_input("投測條件", value=target_project["condition"])
-                new_start_time = st.text_input("投入時間 (YYYY-MM-DD HH:MM)", value=target_project["start_time"].strftime("%Y-%m-%d %H:%M"))
-                hours_str_val = ",".join(map(str, target_project["hours_list"]))
-                new_hours_list_str = st.text_input("取測時數列表 (逗號分隔)", value=hours_str_val)
-
-            new_desc = st.text_area("詳細描述", value=target_project["description"])
+            st.divider()
+            st.subheader("🗑️ 刪除專案")
+            st.caption("⚠️ 警告：刪除專案將一併移除雲端資料庫中該專案的所有測試數據，無法復原！")
             
-            submit_edit = st.form_submit_button("💾 儲存修改並更新雲端資料庫", type="primary")
-
-        if submit_edit:
-            try:
-                if new_id != selected_p_id:
-                    update_data = {
-                        "id": new_id,
-                        "owner": new_owner,
-                        "spec": new_spec,
-                        "sample_size": new_sample_size,
-                        "condition": new_condition,
-                        "status": new_status,
-                        "start_time": new_start_time,
-                        "hours_list": new_hours_list_str,
-                        "description": new_desc
-                    }
-                    supabase.table("projects").insert(update_data).execute()
-                    supabase.table("test_data").update({"project_id": new_id}).eq("project_id", selected_p_id).execute()
-                    supabase.table("projects").delete().eq("id", selected_p_id).execute()
-                else:
-                    update_data = {
-                        "owner": new_owner,
-                        "spec": new_spec,
-                        "sample_size": new_sample_size,
-                        "condition": new_condition,
-                        "status": new_status,
-                        "start_time": new_start_time,
-                        "hours_list": new_hours_list_str,
-                        "description": new_desc
-                    }
-                    supabase.table("projects").update(update_data).eq("id", selected_p_id).execute()
-
-                st.success("✅ 專案資料已成功修改！")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ 修改失敗：{e}")
-
-        st.markdown("---")
-        st.subheader("⚠️ 危險操作區")
-        if st.button(f"🗑️ 徹底刪除專案 #{selected_p_id} (含所有測試數據)", type="secondary"):
-            try:
-                supabase.table("test_data").delete().eq("project_id", selected_p_id).execute()
-                supabase.table("projects").delete().eq("id", selected_p_id).execute()
-                st.success(f"✅ 專案 #{selected_p_id} 及其測試數據已全部徹底刪除！")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ 刪除專案失敗：{e}")
+            confirm_del = st.checkbox(f"我確定要永久刪除專案 #{selected_id}")
+            if st.button("❌ 確認刪除專案", type="primary", disabled=not confirm_del):
+                try:
+                    # 先刪除關聯數據再刪專案
+                    supabase.table("test_data").delete().eq("project_id", selected_id).execute()
+                    supabase.table("projects").delete().eq("id", selected_id).execute()
+                    
+                    if 'projects' in st.session_state:
+                        del st.session_state['projects']
+                        
+                    st.success(f"🗑️ 專案 #{selected_id} 已完全刪除！")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 刪除失敗：{e}")
 
 # -----------------------------------------------------------------------------
 # 功能 5：OP 數據填寫與變化率繪圖
