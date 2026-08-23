@@ -1,7 +1,6 @@
 import os
 import requests
 from datetime import datetime, timezone, timedelta
-from dateutil import parser as date_parser
 from supabase import create_client
 
 # 1. 從環境變數讀取 Supabase 與 LINE API 設定
@@ -29,8 +28,18 @@ def send_broadcast_notice(msg):
     response = requests.post(url, headers=headers, json=payload)
     return response.status_code
 
+def parse_time(time_str):
+    """原生時間解析，避免依賴 dateutil"""
+    formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]
+    for fmt in formats:
+        try:
+            return datetime.strptime(time_str.split(".")[0], fmt)
+        except ValueError:
+            continue
+    return None
+
 def check_and_send():
-    # 2. 取得台灣時間 (Asia/Taipei) 當天日期 (2026-08-24)
+    # 2. 取得台灣時間 (Asia/Taipei) 當天日期
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     today_str = now.strftime("%Y-%m-%d")
@@ -66,9 +75,8 @@ def check_and_send():
         if not start_raw or start_raw.lower() == "none":
             continue
             
-        try:
-            start_dt = date_parser.parse(start_raw)
-        except Exception:
+        start_dt = parse_time(start_raw)
+        if not start_dt:
             continue
 
         # 解析時數列表
