@@ -10,7 +10,7 @@ from supabase import create_client, Client
 import requests
 
 # --- LINE Messaging API 設定 ---
-LINE_TOKEN = "FBqp7NOSHLHt6R+mNM3ICQlecpSInDBJOqnzT5f4xUahWC4PN65F+AO67pY0KVGnA1yuWJdA0X6FQJ4xPGxJo2Fqc9Gv/hhpUj14ji77I1V9dhKPrTHXanMzG49Jq5ezRylj+PgGJhlgvkhXn3n9DQdB04t89/1O/w1cDnyiIFU="
+LINE_TOKEN = "+C/V0Qri/00vt5tNXkZSICfAc+GcSafYSjfm2bF4kgrqMOGh1pa109P1jHyg6cqsA1yuWJdA0X6FQJ4xPGxJo2Fqc9Gv/hhpUj14ji77I1W/cbtDLclBwR6Yu1/1BGYreHgV0ZX3wSsmgYaas7RQjQdB04t89/1O/w1cDnyilFU="
 MY_USER_ID = "U131bdbbee55df1590d0b2b0e5ce3b672"
 
 
