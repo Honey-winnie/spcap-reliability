@@ -7,7 +7,22 @@ from dateutil import parser as date_parser
 import plotly.graph_objects as go
 import plotly.express as px
 from supabase import create_client, Client
+import requests
 
+# --- LINE Messaging API 設定 ---
+LINE_TOKEN = "FBqp7NOSHLHt6R+mNM3ICQlecpSInDBJOqnzT5f4xUahWC4PN65F+AO67pY0KVGnA1yuWJdA0X6FQJ4xPGxJo2Fqc9Gv/hhpUj14ji77I1V9dhKPrTHXanMzG49Jq5ezRylj+PgGJhlgvkhXn3n9DQdB04t89/1O/w1cDnyiIFU="
+MY_USER_ID = "U131bdbbee55df1590d0b2b0e5ce3b672"
+
+
+def push_line_notice(msg):
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_TOKEN}",
+    }
+    payload = {"to": MY_USER_ID, "messages": [{"type": "text", "text": msg}]}
+    res = requests.post(url, headers=headers, json=payload)
+    return res.status_code
 # -----------------------------------------------------------------------------
 # 0. 時區輔助函式
 # -----------------------------------------------------------------------------
@@ -1027,3 +1042,12 @@ elif menu == "📅 甘特圖排程檢視":
         
         df_timetable = pd.DataFrame(timetable_data)
         st.dataframe(df_timetable, use_container_width=True, hide_index=True)
+st.divider()
+if st.button("🔔 測試 LINE 取測提醒"):
+    status = push_line_notice(
+        "【SPCAP 取測提醒】\n測試成功！提醒助手已順利連線。"
+    )
+    if status == 200:
+        st.success("✅ 已發送至 LINE！")
+    else:
+        st.error(f"❌ 發送失敗：{status}")
