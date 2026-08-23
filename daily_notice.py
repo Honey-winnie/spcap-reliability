@@ -3,7 +3,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
 
-# 1. 初始化 Supabase 與 LINE API 設定
+# 1. 從環境變數讀取 Supabase 與 LINE API 設定
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 LINE_TOKEN = os.getenv("LINE_TOKEN")
@@ -29,28 +29,27 @@ def send_broadcast_notice(msg):
     return response.status_code
 
 def check_and_send():
-    # 2. 取得台灣時間 (UTC+8) 當天日期
+    # 2. 取得台灣時間 (UTC+8) 當天日期 (格式：YYYY-MM-DD)
     tw_tz = timezone(timedelta(hours=8))
     today_str = datetime.now(tw_tz).strftime("%Y-%m-%d")
     
-    # 模糊查詢包含 2026-08-24 的所有資料（解決含時間欄位問題）
-    # 若您資料庫欄位叫 next_test_time 或 target_date，可將下方 scheduled_date 換成對應名稱
+    # 先嘗試查詢 scheduled_date 欄位
     response = supabase.table("reliability_tests") \
         .select("*") \
-        .like("scheduled_date", f"{today_str}%") \
+        .eq("scheduled_date", today_str) \
         .execute()
     
     data = response.data
 
-    # 【備用方案】：如果上面的 scheduled_date 查不到，自動改查 due_date 欄位
+    # 若 scheduled_date 查無資料，自動改查 due_date 欄位
     if not data:
         response = supabase.table("reliability_tests") \
             .select("*") \
-            .like("due_date", f"{today_str}%") \
+            .eq("due_date", today_str) \
             .execute()
         data = response.data
 
-    # 【無抽驗項目判斷】
+    # 【無抽驗項目判斷】：若今天沒有任何需抽驗項目，直接結束，不發送 LINE 訊息
     if not data:
         print(f"[{today_str}] 今日無需抽驗項目，跳過通知發送。")
         return
@@ -61,14 +60,12 @@ def check_and_send():
         spec = item.get('product_spec') or item.get('sample_name') or 'N/A'
         owner = item.get('owner') or item.get('engineer') or 'N/A'
         hours = item.get('test_hours') or item.get('status') or 'N/A'
-        time_str = item.get('scheduled_date') or item.get('due_date') or ''
+        time_str = item.get('scheduled_date') or item.get('due_date') or today_str
         
         msg_lines.append(f"{idx}. 產品規格：{spec}")
         msg_lines.append(f"   負責人：{owner}")
         msg_lines.append(f"   取測時數：{hours}")
-        if time_str:
-            msg_lines.append(f"   預計時間：{time_str}")
-        msg_lines.append("")
+        msg_lines.append(f"   預計日期：{time_str}\n")
     
     full_message = "\n".join(msg_lines)
 
