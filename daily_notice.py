@@ -1,6 +1,7 @@
 import os
 import requests
 from datetime import datetime, timezone, timedelta
+from dateutil import parser as date_parser
 from supabase import create_client
 
 # 1. 從環境變數讀取 Supabase 與 LINE API 設定
@@ -29,14 +30,17 @@ def send_broadcast_notice(msg):
     return response.status_code
 
 def parse_time(time_str):
-    """原生時間解析，避免依賴 dateutil"""
-    formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]
-    for fmt in formats:
-        try:
-            return datetime.strptime(time_str.split(".")[0], fmt)
-        except ValueError:
-            continue
-    return None
+    """
+    使用 dateutil 解析時間，與 App(4.txt) 端的 load_projects() 邏輯一致。
+    可以正確解析 Supabase timestamptz 欄位常見的帶時區格式，
+    例如 "2026-08-15 12:00:00+00"。
+    """
+    try:
+        parsed = date_parser.parse(time_str)
+        # 只拿掉時區標記，不做時區轉換，保留原始數字（跟 App 端行為一致）
+        return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+    except (ValueError, TypeError):
+        return None
 
 def check_and_send():
     # 2. 取得台灣時間 (Asia/Taipei) 當天日期
@@ -47,11 +51,13 @@ def check_and_send():
     # 3. 讀取專案總表
     res_proj = supabase.table("projects").select("*").execute()
     projects = res_proj.data or []
+    print(f"[DEBUG] 讀到 {len(projects)} 筆專案")
 
     # 4. 讀取測試數據 (用於確認是否已完成取測)
     res_data = supabase.table("test_data").select("project_id, hour_key").execute()
     test_data = res_data.data or []
-    
+    print(f"[DEBUG] 讀到 {len(test_data)} 筆測試數據")
+
     # 建立已完成紀錄集合 set: {(project_id, hour_key), ...}
     completed_set = set()
     for d in test_data:
@@ -69,14 +75,15 @@ def check_and_send():
         owner = str(p.get("owner", ""))
         spec = str(p.get("spec", ""))
         condition = str(p.get("condition", ""))
-        
+
         # 解析投入時間
         start_raw = str(p.get("start_time", "")).strip()
         if not start_raw or start_raw.lower() == "none":
             continue
-            
+
         start_dt = parse_time(start_raw)
         if not start_dt:
+            print(f"[DEBUG] 專案 #{p_id} 的 start_time 無法解析：{start_raw}")
             continue
 
         # 解析時數列表
