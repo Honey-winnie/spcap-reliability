@@ -11,12 +11,8 @@ from supabase import create_client, Client
 # -----------------------------------------------------------------------------
 # 0. 時區輔助函式
 # -----------------------------------------------------------------------------
-# 雲端主機 (例如 Streamlit Cloud) 的容器時區通常是 UTC，而不是台灣時間，
-# 若直接用 datetime.now()，在台灣時間 00:00~08:00 這段區間，系統認定的「今天」
-# 會比台灣實際日期少一天，導致「今日待取測」等以日期比對的功能失準。
-# 這裡統一改成明確以 Asia/Taipei 時區取得目前時間（再去掉 tzinfo，變回 naive
-# datetime，才能跟資料庫解析出來的 naive start_time 直接比較/相減）。
 def taipei_now() -> datetime:
+    """取得 Asia/Taipei 時區的當前時間 (Naive Datetime)"""
     return datetime.now(ZoneInfo("Asia/Taipei")).replace(tzinfo=None)
 
 # -----------------------------------------------------------------------------
@@ -46,7 +42,7 @@ if not check_password():
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 2. 連線 Supabase 雲端資料庫 (從 Secrets 讀取)
+# 2. 連線 Supabase 雲端資料庫
 # -----------------------------------------------------------------------------
 supabase_url = st.secrets.get("SUPABASE_URL", "").strip()
 supabase_key = st.secrets.get("SUPABASE_KEY", "").strip()
@@ -76,12 +72,6 @@ def load_projects():
         for r in raw:
             hours = [int(h.strip()) for h in str(r.get("hours_list", "")).split(",") if h.strip().isdigit()]
             
-            # 精準解析投入時間，避免被錯誤重置為當前時間。
-            # 注意：如果 Supabase 的 start_time 欄位是 timestamptz 型別，讀出來的字串會帶時區
-            # 尾巴，例如 "2026-08-15T00:00:00+00:00" 或 "...Z"。舊版用 strptime 手動比對固定
-            # 格式，完全沒處理時區尾巴，導致每次都解析失敗、被迫 fallback 成 datetime.now()，
-            # 這也是「不管怎麼改，畫面時間都跟著目前時間漂移」的真正原因。改用 dateutil.parser，
-            # 它能正確解析各種 ISO 時間字串（含時區、含微秒），再統一轉成 naive datetime。
             start_raw = str(r.get("start_time", "")).strip()
             start_dt = None
             if start_raw and start_raw.lower() != "none":
@@ -95,13 +85,19 @@ def load_projects():
             if start_dt is None:
                 start_dt = taipei_now()
                 
+            status = str(r.get("status", "進行中"))
+            stop_hour = r.get("stop_hour", None)
+            stop_reason = str(r.get("stop_reason", ""))
+            
             projects.append({
                 "id": str(r.get("id", "")),
                 "owner": str(r.get("owner", "")),
                 "spec": str(r.get("spec", "")),
                 "sample_size": int(r.get("sample_size", 10)),
                 "condition": str(r.get("condition", "")),
-                "status": str(r.get("status", "進行中")),
+                "status": status,
+                "stop_hour": int(stop_hour) if stop_hour is not None and str(stop_hour).isdigit() else None,
+                "stop_reason": stop_reason,
                 "start_time": start_dt,
                 "start_time_parse_failed": start_parse_failed,
                 "hours_list": hours,
@@ -164,7 +160,7 @@ menu = st.sidebar.radio("系統功能導覽", [
 ])
 
 # -----------------------------------------------------------------------------
-# 功能 1：提醒與逾期看板 (修正歷史日期過濾問題，完整顯示取測排程)
+# 功能 1：提醒與逾期看板
 # -----------------------------------------------------------------------------
 if menu == "📌 提醒與逾期看板":
     st.header("🔔 每日取測提醒與逾期追蹤")
@@ -172,27 +168,40 @@ if menu == "📌 提醒與逾期看板":
     today_str = now.strftime("%Y-%m-%d")
     tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     
+    # 停測專案開關
+    show_stopped = st.checkbox("👁️ 包含「中途停測」項目", value=False)
+    
     st.info(f"當前系統時間：**{now.strftime('%Y-%m-%d %H:%M')}**")
     
     alerts = []
     month_schedule = []
     
-    # 涵蓋過去 14 天至未來 30 天，確保已完成或過期的 72H 也能正常顯示
     past_14_days = now - timedelta(days=14)
     future_30_days = now + timedelta(days=30)
     
     for p in projects_list:
+        if not show_stopped and p['status'] == "中途停測":
+            continue
+            
         p_id = p['id']
         start = p['start_time']
         
-        for h in p['hours_list']:
+        # 若中途停測，則只看小於等於停測時數的排程
+        valid_hours = p['hours_list']
+        if p['status'] == "中途停測" and p['stop_hour'] is not None:
+            valid_hours = [h for h in valid_hours if h <= p['stop_hour']]
+        
+        for h in valid_hours:
             target_dt = start + timedelta(hours=h)
             date_str = target_dt.strftime("%Y-%m-%d")
             hour_key = f"{h}H"
             
             has_data = (p_id in test_data_dict) and (hour_key in test_data_dict[p_id])
             
-            # 只要在顯示區間內（含過去 14 天）就放進日程表
+            status_desc = "✅ 已完成" if has_data else ("🔴 逾期未完成" if target_dt < now else "⏳ 待取測")
+            if p['status'] == "中途停測" and h == p['stop_hour']:
+                status_desc = f"🛑 停測點 ({p['stop_reason']})" if p['stop_reason'] else "🛑 停測點"
+
             if past_14_days.date() <= target_dt.date() <= future_30_days.date():
                 sort_p_id = int(p_id) if str(p_id).isdigit() else p_id
                 month_schedule.append({
@@ -204,10 +213,10 @@ if menu == "📌 提醒與逾期看板":
                     "產品規格": p['spec'],
                     "投測條件": p['condition'],
                     "取測時數": hour_key,
-                    "狀態": "✅ 已完成" if has_data else ("🔴 逾期未完成" if target_dt < now else "⏳ 待取測")
+                    "狀態": status_desc
                 })
 
-            if has_data:
+            if has_data or p['status'] == "中途停測":
                 continue
 
             if target_dt < now:
@@ -250,38 +259,60 @@ if menu == "📌 提醒與逾期看板":
     st.subheader("📅 近一個月取測日程表 (包含過往與未來排程)")
     if month_schedule:
         df_month = pd.DataFrame(month_schedule)
-        # 先按取測日期、預計時間排序，再按項目編號排序
         df_month = df_month.sort_values(by=["取測日期", "預計時間", "sort_p_id"]).drop(columns=["sort_p_id"]).reset_index(drop=True)
         st.dataframe(df_month, use_container_width=True, hide_index=True)
     else:
         st.info("近一個月內無排定任何取測項目。")
 
 # -----------------------------------------------------------------------------
-# 功能 2：投測總表與查詢 (預設依項目編號排序)
+# 功能 2：投測總表與查詢
 # -----------------------------------------------------------------------------
 elif menu == "📋 投測總表與查詢":
     st.header("📋 投測項目總表")
     
+    filter_col1, filter_col2 = st.columns([2, 1])
+    with filter_col1:
+        search_keyword = st.text_input("🔍 輸入關鍵字查詢 (規格/負責人/描述/批號)：", "")
+    with filter_col2:
+        status_filter = st.multiselect("📌 篩選專案狀態", ["進行中", "已完成", "中途停測", "已暫停", "異常終止"], default=["進行中", "已完成", "中途停測"])
+
     if not projects_list:
         st.warning("目前尚無任何投測項目。")
     else:
         table_rows = []
         for p in projects_list:
+            if p['status'] not in status_filter:
+                continue
+                
             p_id = p['id']
             sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
             max_target_h = max(sorted_hours)
             
+            # 若為中途停測，目標時數調整為停測時數
+            if p['status'] == "中途停測" and p['stop_hour'] is not None:
+                effective_target_h = p['stop_hour']
+            else:
+                effective_target_h = max_target_h
+
             current_done_h = 0
             if p_id in test_data_dict:
                 for h in sorted_hours:
                     if f"{h}H" in test_data_dict[p_id]:
                         current_done_h = h
                         
-            progress_pct = round((current_done_h / max_target_h * 100), 1) if max_target_h > 0 else 0
+            progress_pct = round((current_done_h / effective_target_h * 100), 1) if effective_target_h > 0 else 0
+            if progress_pct > 100: progress_pct = 100.0
             
-            # 嘗試轉換編號為數字以便正確排序（避免 "10" 排在 "2" 前面）
             sort_key = int(p_id) if str(p_id).isdigit() else p_id
             
+            status_display = p['status']
+            if p['status'] == "中途停測" and p['stop_hour'] is not None:
+                status_display = f"🛑 停測於 {p['stop_hour']}H"
+            
+            desc_text = p['description']
+            if p['stop_reason']:
+                desc_text += f" | 停測原因: {p['stop_reason']}"
+
             table_rows.append({
                 'sort_key': sort_key,
                 'id': p['id'],
@@ -290,34 +321,32 @@ elif menu == "📋 投測總表與查詢":
                 'condition': p['condition'],
                 'sample_size': p['sample_size'],
                 'current_hours': f"{current_done_h}H",
-                'target_hours': f"{max_target_h}H",
+                'target_hours': f"{effective_target_h}H (原始 {max_target_h}H)" if p['status'] == "中途停測" else f"{effective_target_h}H",
                 'progress': f"{progress_pct}%",
-                'status': p['status'],
-                'description': p['description']
+                'status': status_display,
+                'description': desc_text
             })
             
         df_projects = pd.DataFrame(table_rows)
-        
-        # 依據項目編號 (sort_key) 由小到大排序 (昇冪)
-        df_projects = df_projects.sort_values(by="sort_key", ascending=True).drop(columns=['sort_key'])
-        
-        search_keyword = st.text_input("🔍 輸入關鍵字查詢 (規格/負責人/描述/批號)：", "")
-        
-        if search_keyword:
-            filtered_df = df_projects[
-                df_projects['spec'].str.contains(search_keyword, case=False, na=False) |
-                df_projects['owner'].str.contains(search_keyword, case=False, na=False) |
-                df_projects['id'].str.contains(search_keyword, case=False, na=False) |
-                df_projects['description'].str.contains(search_keyword, case=False, na=False)
-            ]
-        else:
-            filtered_df = df_projects
+        if not df_projects.empty:
+            df_projects = df_projects.sort_values(by="sort_key", ascending=True).drop(columns=['sort_key'])
+            
+            if search_keyword:
+                df_projects = df_projects[
+                    df_projects['spec'].str.contains(search_keyword, case=False, na=False) |
+                    df_projects['owner'].str.contains(search_keyword, case=False, na=False) |
+                    df_projects['id'].str.contains(search_keyword, case=False, na=False) |
+                    df_projects['description'].str.contains(search_keyword, case=False, na=False)
+                ]
 
-        display_df = filtered_df[['id', 'owner', 'spec', 'condition', 'sample_size', 'current_hours', 'target_hours', 'progress', 'status', 'description']].copy()
-        display_df.columns = ['項目編號', '負責人', '產品規格', '投測條件', '投測數量(顆)', '目前測試時數', '目標總時數', '完成進度', '狀態', '詳細描述']
-        
-        st.caption("💡 提示：點擊表格上方任何欄位名稱（如：項目編號、完成進度...），即可切換正向或反向排序。")
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+            display_df = df_projects[['id', 'owner', 'spec', 'condition', 'sample_size', 'current_hours', 'target_hours', 'progress', 'status', 'description']].copy()
+            display_df.columns = ['項目編號', '負責人', '產品規格', '投測條件', '投測數量(顆)', '目前測試時數', '目標總時數', '完成進度', '狀態', '詳細描述']
+            
+            st.caption("💡 提示：點擊表格上方欄位名稱可切換正反向排序。")
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("無符合條件的專案項目。")
+
 # -----------------------------------------------------------------------------
 # 功能 3：新增投測項目
 # -----------------------------------------------------------------------------
@@ -372,16 +401,6 @@ elif menu == "➕ 新增投測項目":
         leadframe_thickness = st.selectbox("導線架厚度 (mm)", ["0.1", "0.15"], index=1)
         molding_die = st.text_input("封裝模具", value="MOLD-A01")
 
-    col_c1, col_c2, col_c3, col_c4 = st.columns(4)
-    with col_c1:
-        impregnation_param = st.text_input("含浸參數", value="PEDOT:PSS / 3次")
-    with col_c2:
-        carbon_paste = st.text_input("碳膠參數", value="Carbon-A / 150°C")
-    with col_c3:
-        silver_paste = st.text_input("銀膠參數", value="Ag-Paste-01")
-    with col_c4:
-        stack_silver_paste = st.text_input("堆疊銀膠", value="Stack-Ag-02")
-
     if st.button("🚀 建立專案並寫入雲端資料庫", type="primary", use_container_width=True):
         if not selected_hours_list:
             st.error("請至少選擇一個取測時數！")
@@ -410,7 +429,7 @@ elif menu == "➕ 新增投測項目":
                 st.error(f"❌ 專案同步雲端失敗：{e}")
 
 # -----------------------------------------------------------------------------
-# 功能 4：修改 / 刪除專案 (修正日期被自動還原與 Key 快取問題)
+# 功能 4：修改 / 刪除專案 (包含中途停測功能)
 # -----------------------------------------------------------------------------
 elif menu == "✏️ 修改 / 刪除專案":
     st.header("✏️ 修改 / 刪除既有投測專案")
@@ -425,20 +444,7 @@ elif menu == "✏️ 修改 / 刪除專案":
         
         if target_p:
             st.divider()
-            if target_p.get('start_time_parse_failed'):
-                st.warning(
-                    "⚠️ 這筆專案的投入時間在資料庫中的格式無法被正確解析，"
-                    "下面顯示的是暫代用的目前時間，並非資料庫實際存的值！"
-                    "請重新設定正確的投入日期/時間並儲存一次即可修復。"
-                )
             init_start = target_p['start_time'] if isinstance(target_p['start_time'], datetime) else taipei_now()
-
-            # 【修正重點 1】
-            # Streamlit 有個常見陷阱：widget 的 key 一旦建立過，之後每次重新執行(包含 st.rerun()
-            # 之後)都會直接沿用瀏覽器 session_state 裡殘留的舊值，「value=」參數只有第一次有效，
-            # 之後就算你把資料庫改對了，畫面也不會跟著更新，導致「明明改了卻沒變、甚至跳回舊日期」的怪現象。
-            # 解法：把「目前資料庫實際載入的投入時間」編進 key 裡，只要資料庫的值一變，key 就跟著變，
-            # Streamlit 會把它當成全新元件，強制採用 value= 給的最新值。
             data_version = init_start.strftime("%Y%m%d%H%M%S")
             
             edit_start_date = st.date_input(
@@ -461,10 +467,19 @@ elif menu == "✏️ 修改 / 刪除專案":
                 hours_str_init = ", ".join([str(h) for h in target_p['hours_list']])
                 edit_hours_str = st.text_input("測試時數節點 (以逗號分隔)：", value=hours_str_init)
                 
-                status_options = ["進行中", "已完成", "已暫停", "異常終止"]
+                status_options = ["進行中", "已完成", "中途停測", "已暫停", "異常終止"]
                 status_index = status_options.index(target_p['status']) if target_p['status'] in status_options else 0
                 edit_status = st.selectbox("專案狀態：", status_options, index=status_index)
                 
+                # 停測專用欄位
+                st.markdown("🛑 **停測設定 (僅在選擇「中途停測」時生效)**")
+                stop_col1, stop_col2 = st.columns(2)
+                with stop_col1:
+                    stop_hour_val = target_p['stop_hour'] if target_p['stop_hour'] is not None else target_p['hours_list'][0]
+                    edit_stop_hour = st.selectbox("停測發生時數 (HR)：", target_p['hours_list'], index=target_p['hours_list'].index(stop_hour_val) if stop_hour_val in target_p['hours_list'] else 0)
+                with stop_col2:
+                    edit_stop_reason = st.text_input("停測原因 (如: ESR飆高/短路/LC漏電Failure)：", value=target_p['stop_reason'])
+
                 edit_description = st.text_area("詳細描述 / 備註：", value=target_p['description'])
                 
                 btn_update = st.form_submit_button("💾 儲存修改並更新雲端資料庫", use_container_width=True)
@@ -485,15 +500,11 @@ elif menu == "✏️ 修改 / 刪除專案":
                                 "start_time": combined_start.strftime("%Y-%m-%d %H:%M:%S"),
                                 "hours_list": ",".join(map(str, parsed_hours)),
                                 "status": edit_status,
+                                "stop_hour": edit_stop_hour if edit_status == "中途停測" else None,
+                                "stop_reason": edit_stop_reason if edit_status == "中途停測" else "",
                                 "description": edit_description
                             }
                             
-                            # 【修正重點 2】
-                            # Supabase/PostgREST 在 .eq("id", ...) 比對不到任何一列時，update() 不會
-                            # 丟出例外，只會回傳空的 data，畫面卻依然顯示「更新成功」——這也是造成
-                            # 「明明存了，結果沒變」的常見原因之一（多半是資料表 id 欄位型別為數字，
-                            # 但程式端送出的是字串，兩邊型別對不上）。這裡改成明確檢查是否真的有列被寫入，
-                            # 若沒有，就自動改用整數型別重試一次，並如實告知使用者。
                             resp = supabase.table("projects").update(update_data).eq("id", selected_id).execute()
                             updated_rows = resp.data or []
 
@@ -502,28 +513,21 @@ elif menu == "✏️ 修改 / 刪除專案":
                                 updated_rows = resp.data or []
 
                             if not updated_rows:
-                                st.error(
-                                    f"❌ 更新失敗：資料庫中找不到 id = {selected_id} 的專案，沒有任何資料列被寫入！\n\n"
-                                    "請檢查 Supabase「projects」資料表 id 欄位的型別，"
-                                    "是否與程式送出的 id 一致（例如資料庫是數字型別，但程式送出的是文字字串）。"
-                                )
+                                st.error(f"❌ 更新失敗：資料庫中找不到 ID={selected_id}，請檢查欄位型態。")
                             else:
-                                st.success(f"✅ 專案 #{selected_id} 投入時間已更新為：{combined_start.strftime('%Y-%m-%d %H:%M')}！系統即將刷新...")
+                                st.success(f"✅ 專案 #{selected_id} 資料已順利更新！")
                                 st.rerun()
                     except Exception as e:
                         st.error(f"❌ 更新失敗：{e}")
             
             st.divider()
             st.subheader("🗑️ 刪除專案")
-            st.caption("⚠️ 警告：刪除專案將一併移除雲端資料庫中該專案的所有測試數據，無法復原！")
-            
             confirm_del = st.checkbox(f"我確定要永久刪除專案 #{selected_id}", key=f"del_chk_{selected_id}")
             if st.button("❌ 確認刪除專案", type="primary", disabled=not confirm_del, key=f"del_btn_{selected_id}"):
                 try:
                     supabase.table("test_data").delete().eq("project_id", selected_id).execute()
                     supabase.table("projects").delete().eq("id", selected_id).execute()
-                    
-                    st.success(f"🗑️ 專案 #{selected_id} 已完全刪除！")
+                    st.success(f"🗑️ 專案 #{selected_id} 已刪除！")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ 刪除失敗：{e}")
@@ -541,6 +545,9 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
         selected_id = st.selectbox("選擇投測專案編號：", p_ids)
         selected_p = next(p for p in projects_list if p['id'] == selected_id)
         
+        if selected_p['status'] == "中途停測":
+            st.error(f"🚨 本專案已於 **{selected_p['stop_hour']}H** 判定【中途停測】！原因：{selected_p['stop_reason'] or '未填寫'}")
+
         n_samples = selected_p["sample_size"]
         st.write(f"**規格**：{selected_p['spec']} ({selected_p['condition']}) | **總顆數**：{n_samples} 顆")
         st.markdown("---")
@@ -569,7 +576,7 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
         
         if st.button(f"☁️ 儲存 {selected_hour} 數據並同步雲端", type="primary"):
             if (edited_df["Cap (uF)"] <= 0).any() or (edited_df["ESR (mΩ)"] <= 0).any():
-                st.error("⚠️ 發現電容值或 ESR 包含 <= 0 的異常數據，請確認後重新儲存！")
+                st.error("⚠️ 電容值或 ESR 包含 <= 0 的異常數據，請確認後重新儲存！")
             else:
                 now_str = taipei_now().strftime("%Y-%m-%d %H:%M:%S")
                 rows = []
@@ -612,15 +619,19 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
                 fig_cap = go.Figure()
                 cap_data = []
                 for i in range(len(df_0h)):
-                    cap_0 = df_0h.loc[i, "Cap (uF)"]
+                    cap_0 = df_0h.iloc[i]["Cap (uF)"]
                     rates = []
                     row = {"顆數": f"#{i+1}", "0H (uF)": cap_0}
                     for h in avail_hours:
-                        curr = test_data_dict[selected_id][f"{h}H"].loc[i, "Cap (uF)"]
-                        rate = ((curr - cap_0) / cap_0) * 100
+                        curr_df = test_data_dict[selected_id][f"{h}H"]
+                        if i < len(curr_df):
+                            curr = curr_df.iloc[i]["Cap (uF)"]
+                            rate = ((curr - cap_0) / cap_0) * 100
+                        else:
+                            rate = np.nan
                         rates.append(rate)
                         if h != 0:
-                            row[f"{h}H 變化率(%)"] = round(rate, 2)
+                            row[f"{h}H 變化率(%)"] = round(rate, 2) if not np.isnan(rate) else None
                     fig_cap.add_trace(go.Scatter(x=avail_hours, y=rates, mode='lines+markers', name=f'#{i+1}'))
                     cap_data.append(row)
                 
@@ -633,7 +644,10 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
                 fig_df = go.Figure()
                 df_data = []
                 for i in range(len(df_0h)):
-                    vals = [test_data_dict[selected_id][f"{h}H"].loc[i, "DF (%)"] for h in avail_hours]
+                    vals = []
+                    for h in avail_hours:
+                        curr_df = test_data_dict[selected_id][f"{h}H"]
+                        vals.append(curr_df.iloc[i]["DF (%)"] if i < len(curr_df) else np.nan)
                     fig_df.add_trace(go.Scatter(x=avail_hours, y=vals, mode='lines+markers', name=f'#{i+1}'))
                     row = {"顆數": f"#{i+1}"}
                     for idx, h in enumerate(avail_hours):
@@ -647,15 +661,19 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
                 fig_esr = go.Figure()
                 esr_data = []
                 for i in range(len(df_0h)):
-                    esr_0 = df_0h.loc[i, "ESR (mΩ)"]
+                    esr_0 = df_0h.iloc[i]["ESR (mΩ)"]
                     rates = []
                     row = {"顆數": f"#{i+1}", "0H (mΩ)": esr_0}
                     for h in avail_hours:
-                        curr = test_data_dict[selected_id][f"{h}H"].loc[i, "ESR (mΩ)"]
-                        rate = ((curr - esr_0) / esr_0) * 100
+                        curr_df = test_data_dict[selected_id][f"{h}H"]
+                        if i < len(curr_df):
+                            curr = curr_df.iloc[i]["ESR (mΩ)"]
+                            rate = ((curr - esr_0) / esr_0) * 100
+                        else:
+                            rate = np.nan
                         rates.append(rate)
                         if h != 0:
-                            row[f"{h}H 變化率(%)"] = round(rate, 2)
+                            row[f"{h}H 變化率(%)"] = round(rate, 2) if not np.isnan(rate) else None
                     fig_esr.add_trace(go.Scatter(x=avail_hours, y=rates, mode='lines+markers', name=f'#{i+1}'))
                     esr_data.append(row)
                 
@@ -668,7 +686,10 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
                 fig_lc = go.Figure()
                 lc_data = []
                 for i in range(len(df_0h)):
-                    vals = [test_data_dict[selected_id][f"{h}H"].loc[i, "LC (uA)"] for h in avail_hours]
+                    vals = []
+                    for h in avail_hours:
+                        curr_df = test_data_dict[selected_id][f"{h}H"]
+                        vals.append(curr_df.iloc[i]["LC (uA)"] if i < len(curr_df) else np.nan)
                     fig_lc.add_trace(go.Scatter(x=avail_hours, y=vals, mode='lines+markers', name=f'#{i+1}'))
                     row = {"顆數": f"#{i+1}"}
                     for idx, h in enumerate(avail_hours):
@@ -678,7 +699,7 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
                 st.plotly_chart(fig_lc, use_container_width=True)
                 st.dataframe(append_avg_row(pd.DataFrame(lc_data)), use_container_width=True, hide_index=True)
         else:
-            st.info("💡 請先完成並上傳 **0H 數據**，系統將自動為您繪製 Cap/DF/ESR/LC 變化趨勢圖與統計表。")
+            st.info("💡 請先完成並上傳 **0H 數據**，系統將自動繪製 Cap/DF/ESR/LC 變化趨勢圖。")
 
 # -----------------------------------------------------------------------------
 # 功能 6：跨批號電性數據比較
@@ -686,17 +707,25 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
 elif menu == "📊 跨批號電性數據比較":
     st.header("📊 多批號 / 實驗組電性平均值對比分析")
     
+    show_stopped_comp = st.checkbox("👁️ 包含「中途停測」項目進行比較", value=True)
+    
     if not projects_list:
         st.warning("目前尚無投測項目可供比較。")
     else:
-        valid_projects = [p for p in projects_list if (p['id'] in test_data_dict) and ("0H" in test_data_dict[p['id']])]
+        valid_projects = [
+            p for p in projects_list 
+            if (p['id'] in test_data_dict) and ("0H" in test_data_dict[p['id']]) and (show_stopped_comp or p['status'] != "中途停測")
+        ]
         
         if not valid_projects:
-            st.warning("目前尚未有專案上傳 0H 數據，請先至少建立並填寫一個專案的 0H 數據。")
+            st.warning("沒有符合條件且已填寫 0H 數據的專案。")
         else:
-            project_options = [f"#{p['id']} - {p['spec']} ({p['condition']})" for p in valid_projects]
+            project_options = [
+                f"#{p['id']} - {p['spec']} ({p['condition']})" + (" [🛑停測]" if p['status'] == "中途停測" else "") 
+                for p in valid_projects
+            ]
             selected_options = st.multiselect(
-                "🔍 請選擇要進行平均值對比的批號 / 專案 (可複選)：",
+                "🔍 請選擇要進行對比的批號 (可複選)：",
                 options=project_options,
                 default=project_options[:min(3, len(project_options))]
             )
@@ -729,7 +758,11 @@ elif menu == "📊 跨批號電性數據比較":
                         
                         hours_x = []
                         avg_rates_y = []
-                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "0H 平均電容 (uF)": round(avg_cap_0, 2)}
+                        label_name = f"#{p_id} ({p_info['spec']})"
+                        if p_info['status'] == "中途停測":
+                            label_name += f" [🛑停於{p_info['stop_hour']}H]"
+
+                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status'], "0H 平均電容 (uF)": round(avg_cap_0, 2)}
                         
                         for h in avail_h:
                             hour_key = f"{h}H"
@@ -741,7 +774,7 @@ elif menu == "📊 跨批號電性數據比較":
                                 row_dict[f"{h}H 平均變化率(%)"] = round(rate, 2)
                                 
                         fig_comp_cap.add_trace(go.Scatter(
-                            x=hours_x, y=avg_rates_y, mode='lines+markers', name=f"#{p_id} ({p_info['spec']})"
+                            x=hours_x, y=avg_rates_y, mode='lines+markers', name=label_name
                         ))
                         table_rows.append(row_dict)
                         
@@ -765,7 +798,11 @@ elif menu == "📊 跨批號電性數據比較":
                         
                         hours_x = []
                         avg_rates_y = []
-                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "0H 平均 ESR (mΩ)": round(avg_esr_0, 2)}
+                        label_name = f"#{p_id} ({p_info['spec']})"
+                        if p_info['status'] == "中途停測":
+                            label_name += f" [🛑停於{p_info['stop_hour']}H]"
+
+                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status'], "0H 平均 ESR (mΩ)": round(avg_esr_0, 2)}
                         
                         for h in avail_h:
                             hour_key = f"{h}H"
@@ -777,7 +814,7 @@ elif menu == "📊 跨批號電性數據比較":
                                 row_dict[f"{h}H 平均變化率(%)"] = round(rate, 2)
                                 
                         fig_comp_esr.add_trace(go.Scatter(
-                            x=hours_x, y=avg_rates_y, mode='lines+markers', name=f"#{p_id} ({p_info['spec']})"
+                            x=hours_x, y=avg_rates_y, mode='lines+markers', name=label_name
                         ))
                         table_rows_esr.append(row_dict)
                         
@@ -798,7 +835,11 @@ elif menu == "📊 跨批號電性數據比較":
                         
                         hours_x = []
                         avg_vals_y = []
-                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition']}
+                        label_name = f"#{p_id} ({p_info['spec']})"
+                        if p_info['status'] == "中途停測":
+                            label_name += f" [🛑停於{p_info['stop_hour']}H]"
+
+                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status']}
                         
                         for h in avail_h:
                             hour_key = f"{h}H"
@@ -808,7 +849,7 @@ elif menu == "📊 跨批號電性數據比較":
                             row_dict[f"{h}H 平均 DF(%)"] = round(avg_df_h, 2)
                                 
                         fig_comp_df.add_trace(go.Scatter(
-                            x=hours_x, y=avg_vals_y, mode='lines+markers', name=f"#{p_id} ({p_info['spec']})"
+                            x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name
                         ))
                         table_rows_df.append(row_dict)
                         
@@ -828,7 +869,11 @@ elif menu == "📊 跨批號電性數據比較":
                         
                         hours_x = []
                         avg_vals_y = []
-                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition']}
+                        label_name = f"#{p_id} ({p_info['spec']})"
+                        if p_info['status'] == "中途停測":
+                            label_name += f" [🛑停於{p_info['stop_hour']}H]"
+
+                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status']}
                         
                         for h in avail_h:
                             hour_key = f"{h}H"
@@ -838,7 +883,7 @@ elif menu == "📊 跨批號電性數據比較":
                             row_dict[f"{h}H 平均 LC(uA)"] = round(avg_lc_h, 2)
                                 
                         fig_comp_lc.add_trace(go.Scatter(
-                            x=hours_x, y=avg_vals_y, mode='lines+markers', name=f"#{p_id} ({p_info['spec']})"
+                            x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name
                         ))
                         table_rows_lc.append(row_dict)
                         
@@ -847,26 +892,37 @@ elif menu == "📊 跨批號電性數據比較":
                     st.dataframe(pd.DataFrame(table_rows_lc), use_container_width=True, hide_index=True)
 
 # -----------------------------------------------------------------------------
-# 功能 7：甘特圖排程檢視 (多色色階與完成進度表)
+# 功能 7：甘特圖排程檢視
 # -----------------------------------------------------------------------------
 elif menu == "📅 甘特圖排程檢視":
     st.header("📅 信賴性投測甘特圖與時間軸")
     
-    if not projects_list:
-        st.warning("目前尚無投測項目排程。")
+    show_stopped_gantt = st.checkbox("👁️ 顯示「中途停測」專案條形圖", value=True)
+    
+    filtered_p_list = [p for p in projects_list if show_stopped_gantt or p['status'] != "中途停測"]
+    
+    if not filtered_p_list:
+        st.warning("目前無符合條件的排程項目。")
     else:
         gantt_data = []
         timetable_data = []
         
-        for p in projects_list:
+        for p in filtered_p_list:
             p_id = p['id']
             start = p['start_time']
             sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
-            max_target_h = max(sorted_hours)
+            
+            # 若為中途停測，甘特圖時間軸只會畫到停測時數
+            if p['status'] == "中途停測" and p['stop_hour'] is not None:
+                display_hours = [h for h in sorted_hours if h <= p['stop_hour']]
+            else:
+                display_hours = sorted_hours
+
+            max_target_h = max(display_hours) if display_hours else 0
             
             current_done_h = 0
             if p_id in test_data_dict:
-                for h in sorted_hours:
+                for h in display_hours:
                     if f"{h}H" in test_data_dict[p_id]:
                         current_done_h = h
                         
@@ -876,27 +932,32 @@ elif menu == "📅 甘特圖排程檢視":
                 "專案編號": p['id'],
                 "負責人": p['owner'],
                 "產品規格": p['spec'],
+                "狀態": p['status'],
                 "投入時間": start.strftime('%Y-%m-%d %H:%M'),
-                "目標總時數": f"{max_target_h}H",
+                "目標/停測時數": f"{max_target_h}H",
                 "已完成時數": f"{current_done_h}H",
                 "完成百分比": f"{progress_pct}%"
             }
             
             prev_time = start
-            for h in sorted_hours:
+            for h in display_hours:
                 target_dt = start + timedelta(hours=h)
                 
+                stage_label = f"{h}H 取測"
+                if p['status'] == "中途停測" and h == p['stop_hour']:
+                    stage_label = f"🛑 停測 ({h}H)"
+
                 gantt_data.append({
                     "Task": f"#{p['id']} ({p['spec']})",
                     "Start": prev_time,
                     "Finish": target_dt,
-                    "Stage": f"{h}H 取測",
+                    "Stage": stage_label,
                     "Owner": p['owner'],
                     "預計取測時間": target_dt.strftime('%Y-%m-%d %H:%M')
                 })
                 prev_time = target_dt
                 
-                row_detail[f"{h}H 取測時間"] = target_dt.strftime('%m/%d %H:%M')
+                row_detail[f"{h}H 時間"] = target_dt.strftime('%m/%d %H:%M')
                 
             timetable_data.append(row_detail)
                 
@@ -912,7 +973,7 @@ elif menu == "📅 甘特圖排程檢視":
             title="投測項目時間軸甘特圖"
         )
         
-        calc_height = max(350, len(projects_list) * 80)
+        calc_height = max(350, len(filtered_p_list) * 80)
         fig_gantt.update_yaxes(autorange="reversed")
         fig_gantt.update_layout(
             height=calc_height, 
@@ -923,9 +984,7 @@ elif menu == "📅 甘特圖排程檢視":
         st.plotly_chart(fig_gantt, use_container_width=True)
 
         st.markdown("---")
-        
         st.subheader("📋 各專案取測時間與進度對照總表")
-        st.caption("💡 包含目標總時數、已完成最高時數與自動計算之完成百分比（%）：")
         
         df_timetable = pd.DataFrame(timetable_data)
         st.dataframe(df_timetable, use_container_width=True, hide_index=True)
