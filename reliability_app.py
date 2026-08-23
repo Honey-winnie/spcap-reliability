@@ -86,7 +86,6 @@ def load_projects():
                 start_dt = taipei_now()
                 
             raw_status = str(r.get("status", "進行中"))
-            # 自動將過往的「中途停測」舊資料兼容對應至「停測」
             status = "停測" if raw_status in ["中途停測", "已暫停", "異常終止"] else raw_status
             
             stop_hour = r.get("stop_hour", None)
@@ -171,7 +170,6 @@ if menu == "📌 提醒與逾期看板":
     today_str = now.strftime("%Y-%m-%d")
     tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     
-    # 停測專案開關
     show_stopped = st.checkbox("👁️ 包含「停測」項目", value=False)
     
     st.info(f"當前系統時間：**{now.strftime('%Y-%m-%d %H:%M')}**")
@@ -189,7 +187,6 @@ if menu == "📌 提醒與逾期看板":
         p_id = p['id']
         start = p['start_time']
         
-        # 若停測，則只看小於等於停測時數的排程
         valid_hours = p['hours_list']
         if p['status'] == "停測" and p['stop_hour'] is not None:
             valid_hours = [h for h in valid_hours if h <= p['stop_hour']]
@@ -291,7 +288,6 @@ elif menu == "📋 投測總表與查詢":
             sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
             max_target_h = max(sorted_hours)
             
-            # 若為停測，目標時數調整為停測時數
             if p['status'] == "停測" and p['stop_hour'] is not None:
                 effective_target_h = p['stop_hour']
             else:
@@ -351,7 +347,7 @@ elif menu == "📋 投測總表與查詢":
             st.info("無符合條件的專案項目。")
 
 # -----------------------------------------------------------------------------
-# 功能 3：新增投測項目
+# 功能 3：新增投測項目 (已補回含浸、塗膠與堆疊等完整材料與製程參數)
 # -----------------------------------------------------------------------------
 elif menu == "➕ 新增投測項目":
     st.header("➕ 新建信賴性投測實驗")
@@ -393,6 +389,7 @@ elif menu == "➕ 新增投測項目":
     st.markdown("---")
     st.subheader("🧩 材料與製程詳細參數")
     
+    # 第一排：基本結構與導線架
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
         foil_name = st.text_input("鋁箔名稱", value="A4R2125JLK01B014")
@@ -401,8 +398,19 @@ elif menu == "➕ 新增投測項目":
         stack_layers = st.selectbox("堆疊層數 (上+下)", ["1+1", "1+2", "2+1", "2+2", "2+3", "3+2", "3+3", "3+4", "4+3", "4+4"], index=4)
         leadframe_type = st.selectbox("導線架種類", ["C1814導線架", "C1100選鍍導線架", "紫銅導線架", "黃銅導線架", "加寬導線架", "粗化導線架"])
     with col_m3:
-        leadframe_thickness = st.selectbox("導線架厚度 (mm)", ["0.1", "0.15"], index=1)
+        leadframe_thickness = st.selectbox("導线架厚度 (mm)", ["0.1", "0.15"], index=1)
         molding_die = st.text_input("封裝模具", value="MOLD-A01")
+
+    # 第二排：含浸與塗膠製程參數
+    col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+    with col_p1:
+        impregnation_param = st.text_input("含浸參數", value="標準PEDOT/PSS (30min)")
+    with col_p2:
+        carbon_paste_param = st.text_input("塗碳膠參數", value="導電碳膠-C01 (乾燥120°C/15m)")
+    with col_p3:
+        silver_paste_param = st.text_input("塗銀膠參數", value="導電銀膠-Ag02 (乾燥150°C/30m)")
+    with col_p4:
+        stack_silver_param = st.text_input("堆疊銀膠參數", value="點膠量0.05mg (固化180°C/60m)")
 
     if st.button("🚀 建立專案並寫入雲端資料庫", type="primary", use_container_width=True):
         if not selected_hours_list:
@@ -411,7 +419,12 @@ elif menu == "➕ 新增投測項目":
             start_dt_str = f"{start_date.strftime('%Y-%m-%d')} {start_time.strftime('%H:%M')}"
             condition_str = f"{test_temp}°C - {test_item}({test_voltage}V) | MSL3: {msl3}"
             hours_str = ",".join(map(str, selected_hours_list))
-            formatted_desc = f"鋁箔: {foil_name} ({foil_width}) | 堆疊: {stack_layers} | 導線架: {leadframe_type} ({leadframe_thickness}mm)"
+            
+            # 完整格式化包含含浸與塗膠參數的描述文字
+            formatted_desc = (
+                f"鋁箔: {foil_name} ({foil_width}) | 堆疊: {stack_layers} | 導線架: {leadframe_type} ({leadframe_thickness}mm) | "
+                f"含浸: {impregnation_param} | 塗碳: {carbon_paste_param} | 塗銀: {silver_paste_param} | 堆疊銀膠: {stack_silver_param}"
+            )
             
             data = {
                 "id": p_id,
@@ -432,7 +445,7 @@ elif menu == "➕ 新增投測項目":
                 st.error(f"❌ 專案同步雲端失敗：{e}")
 
 # -----------------------------------------------------------------------------
-# 功能 4：修改 / 刪除專案 (簡化專案狀態)
+# 功能 4：修改 / 刪除專案
 # -----------------------------------------------------------------------------
 elif menu == "✏️ 修改 / 刪除專案":
     st.header("✏️ 修改 / 刪除既有投測專案")
@@ -470,12 +483,10 @@ elif menu == "✏️ 修改 / 刪除專案":
                 hours_str_init = ", ".join([str(h) for h in target_p['hours_list']])
                 edit_hours_str = st.text_input("測試時數節點 (以逗號分隔)：", value=hours_str_init)
                 
-                # 簡化後的狀態選單
                 status_options = ["進行中", "已完成", "停測"]
                 status_index = status_options.index(target_p['status']) if target_p['status'] in status_options else 0
                 edit_status = st.selectbox("專案狀態：", status_options, index=status_index)
                 
-                # 停測專用欄位
                 st.markdown("🛑 **停測設定 (僅在選擇「停測」時生效)**")
                 stop_col1, stop_col2 = st.columns(2)
                 with stop_col1:
@@ -485,7 +496,7 @@ elif menu == "✏️ 修改 / 刪除專案":
                 with stop_col2:
                     edit_stop_reason = st.text_input("停測原因 (自由填寫，如: 有問題 / 不重要了 / ESR飆高)：", value=target_p['stop_reason'])
 
-                edit_description = st.text_area("詳細描述 / 備註：", value=target_p['description'])
+                edit_description = st.text_area("詳細描述 / 材料與製程備註：", value=target_p['description'])
                 
                 btn_update = st.form_submit_button("💾 儲存修改並更新雲端資料庫", use_container_width=True)
                 
@@ -555,6 +566,7 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
 
         n_samples = selected_p["sample_size"]
         st.write(f"**規格**：{selected_p['spec']} ({selected_p['condition']}) | **總顆數**：{n_samples} 顆")
+        st.caption(f"**備註資訊**：{selected_p['description']}")
         st.markdown("---")
         
         st.subheader("✍️ OP 數據輸入區")
@@ -917,7 +929,6 @@ elif menu == "📅 甘特圖排程檢視":
             start = p['start_time']
             sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
             
-            # 若為停測，甘特圖時間軸只會畫到停測時數
             if p['status'] == "停測" and p['stop_hour'] is not None:
                 display_hours = [h for h in sorted_hours if h <= p['stop_hour']]
             else:
