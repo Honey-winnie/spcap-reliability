@@ -610,7 +610,7 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
         st.markdown("---")
         st.subheader("📈 信賴性變化率趨勢圖與統計 (主管 / 工程師檢視區)")
         
-        tab_cap, tab_df, tab_esr, tab_lc = st.tabs(["⚡ Cap 變化率 (%)", "📉 DF 損耗角", "🔌 ESR 變化率 (%)", "💧 LC 漏電流"])
+        tab_cap, tab_df, tab_esr, tab_lc = st.tabs(["⚡ Cap 靜電容量", "📉 DF 損耗角", "🔌 ESR 等效串聯電阻", "💧 LC 漏電流"])
         has_0h = (selected_id in test_data_dict) and ("0H" in test_data_dict[selected_id])
         
         if has_0h:
@@ -711,7 +711,7 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
             st.info("💡 請先完成並上傳 **0H 數據**，系統將自動繪製 Cap/DF/ESR/LC 變化趨勢圖。")
 
 # -----------------------------------------------------------------------------
-# 功能 6：跨批號電性數據比較 (已調整順序與新增 ESR 原始數值對比)
+# 功能 6：跨批號電性數據比較 (優化：四項電性均包含 上方變化率 + 下方原始數值)
 # -----------------------------------------------------------------------------
 elif menu == "📊 跨批號電性數據比較":
     st.header("📊 多批號 / 實驗組電性平均值對比分析")
@@ -745,184 +745,192 @@ elif menu == "📊 跨批號電性數據比較":
                 st.info("請至少選擇一個批號進行比較。")
             else:
                 st.markdown("---")
-                # 調整順序：Cap -> DF -> ESR -> LC
+                
+                # 四個分頁順序：Cap -> DF -> ESR -> LC
                 tab_comp_cap, tab_comp_df, tab_comp_esr, tab_comp_lc = st.tabs([
-                    "⚡ 平均 Cap 變化率 (%)", 
-                    "📉 平均 DF (%)", 
-                    "🔌 平均 ESR (數值 / 變化率)", 
-                    "💧 平均 LC (uA)"
+                    "⚡ Cap 靜電容量", 
+                    "📉 DF 損耗角", 
+                    "🔌 ESR 等效串聯電阻", 
+                    "💧 LC 漏電流"
                 ])
 
-                # 1. Cap 變化率
-                with tab_comp_cap:
-                    fig_comp_cap = go.Figure()
-                    table_rows = []
+                # 通用數據計算邏輯
+                def get_comp_metric_data(selected_ids, projects_list, test_data_dict, metric_col):
+                    rate_data = []
+                    val_data = []
                     
                     for p_id in selected_ids:
                         p_info = next(p for p in projects_list if p['id'] == p_id)
                         p_data = test_data_dict[p_id]
                         
                         df_0h = p_data["0H"]
-                        avg_cap_0 = df_0h["Cap (uF)"].mean()
+                        avg_0 = df_0h[metric_col].mean()
                         avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
                         
-                        hours_x, avg_rates_y = [], []
                         label_name = f"#{p_id} ({p_info['spec']})"
                         if p_info['status'] == "停測":
                             label_name += f" [🛑停於{p_info['stop_hour']}H]"
 
-                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status'], "0H 平均電容 (uF)": round(avg_cap_0, 2)}
+                        # 變化率 Row
+                        rate_row = {
+                            "專案編號/批號": f"#{p_id}", 
+                            "負責人": p_info['owner'], 
+                            "條件描述": p_info['condition'], 
+                            "狀態": p_info['status'], 
+                            "0H 平均數值": round(avg_0, 2)
+                        }
+                        
+                        # 原始數值 Row
+                        val_row = {
+                            "專案編號/批號": f"#{p_id}", 
+                            "負責人": p_info['owner'], 
+                            "條件描述": p_info['condition'], 
+                            "狀態": p_info['status']
+                        }
+                        
+                        hours_x = []
+                        rates_y = []
+                        vals_y = []
                         
                         for h in avail_h:
                             hour_key = f"{h}H"
-                            avg_cap_h = p_data[hour_key]["Cap (uF)"].mean()
-                            rate = ((avg_cap_h - avg_cap_0) / avg_cap_0) * 100
+                            avg_h = p_data[hour_key][metric_col].mean()
+                            rate = ((avg_h - avg_0) / avg_0) * 100 if avg_0 != 0 else 0
+                            
                             hours_x.append(h)
-                            avg_rates_y.append(rate)
+                            rates_y.append(rate)
+                            vals_y.append(avg_h)
+                            
+                            val_row[f"{h}H 平均值"] = round(avg_h, 2)
                             if h != 0:
-                                row_dict[f"{h}H 平均變化率(%)"] = round(rate, 2)
+                                rate_row[f"{h}H 變化率(%)"] = round(rate, 2)
                                 
-                        fig_comp_cap.add_trace(go.Scatter(x=hours_x, y=avg_rates_y, mode='lines+markers', name=label_name))
-                        table_rows.append(row_dict)
+                        rate_data.append({"label": label_name, "x": hours_x, "y": rates_y, "row": rate_row})
+                        val_data.append({"label": label_name, "x": hours_x, "y": vals_y, "row": val_row})
                         
-                    fig_comp_cap.add_hline(y=-20, line_dash="dash", line_color="red", annotation_text="Cap 下限 (-20%)")
-                    fig_comp_cap.update_layout(title="跨批號平均 Cap 變化率對比趨勢 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔCap (%)")
-                    st.plotly_chart(fig_comp_cap, use_container_width=True)
-                    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+                    return rate_data, val_data
 
-                # 2. DF 損耗角
+                # ==========================================
+                # 1. Cap 分頁 (上：變化率 / 下：數值)
+                # ==========================================
+                with tab_comp_cap:
+                    cap_rate_data, cap_val_data = get_comp_metric_data(selected_ids, projects_list, test_data_dict, "Cap (uF)")
+                    
+                    # 上區塊：變化率
+                    st.subheader("📈 Cap 平均變化率對比 (%)")
+                    fig_cap_rate = go.Figure()
+                    table_cap_rate = []
+                    for item in cap_rate_data:
+                        fig_cap_rate.add_trace(go.Scatter(x=item["x"], y=item["y"], mode='lines+markers', name=item["label"]))
+                        table_cap_rate.append(item["row"])
+                    fig_cap_rate.add_hline(y=-20, line_dash="dash", line_color="red", annotation_text="Cap 下限 (-20%)")
+                    fig_cap_rate.update_layout(title="Cap 平均變化率趨勢圖 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔCap (%)")
+                    st.plotly_chart(fig_cap_rate, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_cap_rate), use_container_width=True, hide_index=True)
+                    
+                    st.divider()
+                    
+                    # 下區塊：原始數值
+                    st.subheader("📏 Cap 平均原始數值對比 (uF)")
+                    fig_cap_val = go.Figure()
+                    table_cap_val = []
+                    for item in cap_val_data:
+                        fig_cap_val.add_trace(go.Scatter(x=item["x"], y=item["y"], mode='lines+markers', name=item["label"]))
+                        table_cap_val.append(item["row"])
+                    fig_cap_val.update_layout(title="Cap 平均數值趨勢圖 (uF)", xaxis_title="時數 (H)", yaxis_title="平均 Cap (uF)")
+                    st.plotly_chart(fig_cap_val, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_cap_val), use_container_width=True, hide_index=True)
+
+                # ==========================================
+                # 2. DF 分頁 (上：變化率 / 下：數值)
+                # ==========================================
                 with tab_comp_df:
-                    fig_comp_df = go.Figure()
-                    table_rows_df = []
+                    df_rate_data, df_val_data = get_comp_metric_data(selected_ids, projects_list, test_data_dict, "DF (%)")
                     
-                    for p_id in selected_ids:
-                        p_info = next(p for p in projects_list if p['id'] == p_id)
-                        p_data = test_data_dict[p_id]
-                        avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
-                        
-                        hours_x, avg_vals_y = [], []
-                        label_name = f"#{p_id} ({p_info['spec']})"
-                        if p_info['status'] == "停測":
-                            label_name += f" [🛑停於{p_info['stop_hour']}H]"
+                    # 上區塊：變化率
+                    st.subheader("📈 DF 平均變化率對比 (%)")
+                    fig_df_rate = go.Figure()
+                    table_df_rate = []
+                    for item in df_rate_data:
+                        fig_df_rate.add_trace(go.Scatter(x=item["x"], y=item["y"], mode='lines+markers', name=item["label"]))
+                        table_df_rate.append(item["row"])
+                    fig_df_rate.update_layout(title="DF 平均變化率趨勢圖 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔDF (%)")
+                    st.plotly_chart(fig_df_rate, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_df_rate), use_container_width=True, hide_index=True)
+                    
+                    st.divider()
+                    
+                    # 下區塊：原始數值
+                    st.subheader("📏 DF 平均原始數值對比 (%)")
+                    fig_df_val = go.Figure()
+                    table_df_val = []
+                    for item in df_val_data:
+                        fig_df_val.add_trace(go.Scatter(x=item["x"], y=item["y"], mode='lines+markers', name=item["label"]))
+                        table_df_val.append(item["row"])
+                    fig_df_val.update_layout(title="DF 平均數值趨勢圖 (%)", xaxis_title="時數 (H)", yaxis_title="平均 DF (%)")
+                    st.plotly_chart(fig_df_val, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_df_val), use_container_width=True, hide_index=True)
 
-                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status']}
-                        
-                        for h in avail_h:
-                            hour_key = f"{h}H"
-                            avg_df_h = p_data[hour_key]["DF (%)"].mean()
-                            hours_x.append(h)
-                            avg_vals_y.append(avg_df_h)
-                            row_dict[f"{h}H 平均 DF(%)"] = round(avg_df_h, 2)
-                                
-                        fig_comp_df.add_trace(go.Scatter(x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name))
-                        table_rows_df.append(row_dict)
-                        
-                    fig_comp_df.update_layout(title="跨批號平均 DF 損耗角對比趨勢 (%)", xaxis_title="時數 (H)", yaxis_title="平均 DF (%)")
-                    st.plotly_chart(fig_comp_df, use_container_width=True)
-                    st.dataframe(pd.DataFrame(table_rows_df), use_container_width=True, hide_index=True)
-
-                # 3. ESR (包含 原始數值與變化率 子分頁)
+                # ==========================================
+                # 3. ESR 分頁 (上：變化率 / 下：數值)
+                # ==========================================
                 with tab_comp_esr:
-                    esr_sub_tab1, esr_sub_tab2 = st.tabs(["📏 ESR 原始數值 (mΩ)", "📈 ESR 變化率 (%)"])
+                    esr_rate_data, esr_val_data = get_comp_metric_data(selected_ids, projects_list, test_data_dict, "ESR (mΩ)")
                     
-                    # 3a. ESR 原始數值 (mΩ)
-                    with esr_sub_tab1:
-                        fig_comp_esr_val = go.Figure()
-                        table_rows_esr_val = []
-                        
-                        for p_id in selected_ids:
-                            p_info = next(p for p in projects_list if p['id'] == p_id)
-                            p_data = test_data_dict[p_id]
-                            avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
-                            
-                            hours_x, avg_vals_y = [], []
-                            label_name = f"#{p_id} ({p_info['spec']})"
-                            if p_info['status'] == "停測":
-                                label_name += f" [🛑停於{p_info['stop_hour']}H]"
+                    # 上區塊：變化率
+                    st.subheader("📈 ESR 平均變化率對比 (%)")
+                    fig_esr_rate = go.Figure()
+                    table_esr_rate = []
+                    for item in esr_rate_data:
+                        fig_esr_rate.add_trace(go.Scatter(x=item["x"], y=item["y"], mode='lines+markers', name=item["label"]))
+                        table_esr_rate.append(item["row"])
+                    fig_esr_rate.add_hline(y=200, line_dash="dash", line_color="red", annotation_text="ESR 上限 (+200%)")
+                    fig_esr_rate.update_layout(title="ESR 平均變化率趨勢圖 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔESR (%)")
+                    st.plotly_chart(fig_esr_rate, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_esr_rate), use_container_width=True, hide_index=True)
+                    
+                    st.divider()
+                    
+                    # 下區塊：原始數值
+                    st.subheader("📏 ESR 平均原始數值對比 (mΩ)")
+                    fig_esr_val = go.Figure()
+                    table_esr_val = []
+                    for item in esr_val_data:
+                        fig_esr_val.add_trace(go.Scatter(x=item["x"], y=item["y"], mode='lines+markers', name=item["label"]))
+                        table_esr_val.append(item["row"])
+                    fig_esr_val.update_layout(title="ESR 平均數值趨勢圖 (mΩ)", xaxis_title="時數 (H)", yaxis_title="平均 ESR (mΩ)")
+                    st.plotly_chart(fig_esr_val, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_esr_val), use_container_width=True, hide_index=True)
 
-                            row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status']}
-                            
-                            for h in avail_h:
-                                hour_key = f"{h}H"
-                                avg_esr_h = p_data[hour_key]["ESR (mΩ)"].mean()
-                                hours_x.append(h)
-                                avg_vals_y.append(avg_esr_h)
-                                row_dict[f"{h}H 平均 ESR(mΩ)"] = round(avg_esr_h, 2)
-                                    
-                            fig_comp_esr_val.add_trace(go.Scatter(x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name))
-                            table_rows_esr_val.append(row_dict)
-                            
-                        fig_comp_esr_val.update_layout(title="跨批號平均 ESR 原始數值對比趨勢 (mΩ)", xaxis_title="時數 (H)", yaxis_title="平均 ESR (mΩ)")
-                        st.plotly_chart(fig_comp_esr_val, use_container_width=True)
-                        st.dataframe(pd.DataFrame(table_rows_esr_val), use_container_width=True, hide_index=True)
-
-                    # 3b. ESR 變化率 (%)
-                    with esr_sub_tab2:
-                        fig_comp_esr_rate = go.Figure()
-                        table_rows_esr_rate = []
-                        
-                        for p_id in selected_ids:
-                            p_info = next(p for p in projects_list if p['id'] == p_id)
-                            p_data = test_data_dict[p_id]
-                            
-                            df_0h = p_data["0H"]
-                            avg_esr_0 = df_0h["ESR (mΩ)"].mean()
-                            avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
-                            
-                            hours_x, avg_rates_y = [], []
-                            label_name = f"#{p_id} ({p_info['spec']})"
-                            if p_info['status'] == "停測":
-                                label_name += f" [🛑停於{p_info['stop_hour']}H]"
-
-                            row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status'], "0H 平均 ESR (mΩ)": round(avg_esr_0, 2)}
-                            
-                            for h in avail_h:
-                                hour_key = f"{h}H"
-                                avg_esr_h = p_data[hour_key]["ESR (mΩ)"].mean()
-                                rate = ((avg_esr_h - avg_esr_0) / avg_esr_0) * 100
-                                hours_x.append(h)
-                                avg_rates_y.append(rate)
-                                if h != 0:
-                                    row_dict[f"{h}H 平均變化率(%)"] = round(rate, 2)
-                                    
-                            fig_comp_esr_rate.add_trace(go.Scatter(x=hours_x, y=avg_rates_y, mode='lines+markers', name=label_name))
-                            table_rows_esr_rate.append(row_dict)
-                            
-                        fig_comp_esr_rate.add_hline(y=200, line_dash="dash", line_color="red", annotation_text="ESR 上限 (+200%)")
-                        fig_comp_esr_rate.update_layout(title="跨批號平均 ESR 變化率對比趨勢 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔESR (%)")
-                        st.plotly_chart(fig_comp_esr_rate, use_container_width=True)
-                        st.dataframe(pd.DataFrame(table_rows_esr_rate), use_container_width=True, hide_index=True)
-
-                # 4. LC 漏電流
+                # ==========================================
+                # 4. LC 分頁 (上：變化率 / 下：數值)
+                # ==========================================
                 with tab_comp_lc:
-                    fig_comp_lc = go.Figure()
-                    table_rows_lc = []
+                    lc_rate_data, lc_val_data = get_comp_metric_data(selected_ids, projects_list, test_data_dict, "LC (uA)")
                     
-                    for p_id in selected_ids:
-                        p_info = next(p for p in projects_list if p['id'] == p_id)
-                        p_data = test_data_dict[p_id]
-                        avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
-                        
-                        hours_x, avg_vals_y = [], []
-                        label_name = f"#{p_id} ({p_info['spec']})"
-                        if p_info['status'] == "停測":
-                            label_name += f" [🛑停於{p_info['stop_hour']}H]"
-
-                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status']}
-                        
-                        for h in avail_h:
-                            hour_key = f"{h}H"
-                            avg_lc_h = p_data[hour_key]["LC (uA)"].mean()
-                            hours_x.append(h)
-                            avg_vals_y.append(avg_lc_h)
-                            row_dict[f"{h}H 平均 LC(uA)"] = round(avg_lc_h, 2)
-                                
-                        fig_comp_lc.add_trace(go.Scatter(x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name))
-                        table_rows_lc.append(row_dict)
-                        
-                    fig_comp_lc.update_layout(title="跨批號平均 LC 漏電流對比趨勢 (uA)", xaxis_title="時數 (H)", yaxis_title="平均 LC (uA)")
-                    st.plotly_chart(fig_comp_lc, use_container_width=True)
-                    st.dataframe(pd.DataFrame(table_rows_lc), use_container_width=True, hide_index=True)
+                    # 上區塊：變化率
+                    st.subheader("📈 LC 平均變化率對比 (%)")
+                    fig_lc_rate = go.Figure()
+                    table_lc_rate = []
+                    for item in lc_rate_data:
+                        fig_lc_rate.add_trace(go.Scatter(x=item["x"], y=item["y"], mode='lines+markers', name=item["label"]))
+                        table_lc_rate.append(item["row"])
+                    fig_lc_rate.update_layout(title="LC 平均變化率趨勢圖 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔLC (%)")
+                    st.plotly_chart(fig_lc_rate, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_lc_rate), use_container_width=True, hide_index=True)
+                    
+                    st.divider()
+                    
+                    # 下區塊：原始數值
+                    st.subheader("📏 LC 平均原始數值對比 (uA)")
+                    fig_lc_val = go.Figure()
+                    table_lc_val = []
+                    for item in lc_val_data:
+                        fig_lc_val.add_trace(go.Scatter(x=item["x"], y=item["y"], mode='lines+markers', name=item["label"]))
+                        table_lc_val.append(item["row"])
+                    fig_lc_val.update_layout(title="LC 平均數值趨勢圖 (uA)", xaxis_title="時數 (H)", yaxis_title="平均 LC (uA)")
+                    st.plotly_chart(fig_lc_val, use_container_width=True)
+                    st.dataframe(pd.DataFrame(table_lc_val), use_container_width=True, hide_index=True)
 
 # -----------------------------------------------------------------------------
 # 功能 7：甘特圖排程檢視
