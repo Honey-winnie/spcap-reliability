@@ -20,7 +20,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests supabase
+          pip install requests supabase python-dateutil
 
       - name: Run script
         env:
