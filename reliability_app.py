@@ -85,7 +85,10 @@ def load_projects():
             if start_dt is None:
                 start_dt = taipei_now()
                 
-            status = str(r.get("status", "進行中"))
+            raw_status = str(r.get("status", "進行中"))
+            # 自動將過往的「中途停測」舊資料兼容對應至「停測」
+            status = "停測" if raw_status in ["中途停測", "已暫停", "異常終止"] else raw_status
+            
             stop_hour = r.get("stop_hour", None)
             stop_reason = str(r.get("stop_reason", ""))
             
@@ -169,7 +172,7 @@ if menu == "📌 提醒與逾期看板":
     tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     
     # 停測專案開關
-    show_stopped = st.checkbox("👁️ 包含「中途停測」項目", value=False)
+    show_stopped = st.checkbox("👁️ 包含「停測」項目", value=False)
     
     st.info(f"當前系統時間：**{now.strftime('%Y-%m-%d %H:%M')}**")
     
@@ -180,15 +183,15 @@ if menu == "📌 提醒與逾期看板":
     future_30_days = now + timedelta(days=30)
     
     for p in projects_list:
-        if not show_stopped and p['status'] == "中途停測":
+        if not show_stopped and p['status'] == "停測":
             continue
             
         p_id = p['id']
         start = p['start_time']
         
-        # 若中途停測，則只看小於等於停測時數的排程
+        # 若停測，則只看小於等於停測時數的排程
         valid_hours = p['hours_list']
-        if p['status'] == "中途停測" and p['stop_hour'] is not None:
+        if p['status'] == "停測" and p['stop_hour'] is not None:
             valid_hours = [h for h in valid_hours if h <= p['stop_hour']]
         
         for h in valid_hours:
@@ -199,7 +202,7 @@ if menu == "📌 提醒與逾期看板":
             has_data = (p_id in test_data_dict) and (hour_key in test_data_dict[p_id])
             
             status_desc = "✅ 已完成" if has_data else ("🔴 逾期未完成" if target_dt < now else "⏳ 待取測")
-            if p['status'] == "中途停測" and h == p['stop_hour']:
+            if p['status'] == "停測" and h == p['stop_hour']:
                 status_desc = f"🛑 停測點 ({p['stop_reason']})" if p['stop_reason'] else "🛑 停測點"
 
             if past_14_days.date() <= target_dt.date() <= future_30_days.date():
@@ -216,7 +219,7 @@ if menu == "📌 提醒與逾期看板":
                     "狀態": status_desc
                 })
 
-            if has_data or p['status'] == "中途停測":
+            if has_data or p['status'] == "停測":
                 continue
 
             if target_dt < now:
@@ -274,7 +277,7 @@ elif menu == "📋 投測總表與查詢":
     with filter_col1:
         search_keyword = st.text_input("🔍 輸入關鍵字查詢 (規格/負責人/描述/批號)：", "")
     with filter_col2:
-        status_filter = st.multiselect("📌 篩選專案狀態", ["進行中", "已完成", "中途停測", "已暫停", "異常終止"], default=["進行中", "已完成", "中途停測"])
+        status_filter = st.multiselect("📌 篩選專案狀態", ["進行中", "已完成", "停測"], default=["進行中", "已完成", "停測"])
 
     if not projects_list:
         st.warning("目前尚無任何投測項目。")
@@ -288,8 +291,8 @@ elif menu == "📋 投測總表與查詢":
             sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
             max_target_h = max(sorted_hours)
             
-            # 若為中途停測，目標時數調整為停測時數
-            if p['status'] == "中途停測" and p['stop_hour'] is not None:
+            # 若為停測，目標時數調整為停測時數
+            if p['status'] == "停測" and p['stop_hour'] is not None:
                 effective_target_h = p['stop_hour']
             else:
                 effective_target_h = max_target_h
@@ -306,7 +309,7 @@ elif menu == "📋 投測總表與查詢":
             sort_key = int(p_id) if str(p_id).isdigit() else p_id
             
             status_display = p['status']
-            if p['status'] == "中途停測" and p['stop_hour'] is not None:
+            if p['status'] == "停測" and p['stop_hour'] is not None:
                 status_display = f"🛑 停測於 {p['stop_hour']}H"
             
             desc_text = p['description']
@@ -321,7 +324,7 @@ elif menu == "📋 投測總表與查詢":
                 'condition': p['condition'],
                 'sample_size': p['sample_size'],
                 'current_hours': f"{current_done_h}H",
-                'target_hours': f"{effective_target_h}H (原始 {max_target_h}H)" if p['status'] == "中途停測" else f"{effective_target_h}H",
+                'target_hours': f"{effective_target_h}H (原始 {max_target_h}H)" if p['status'] == "停測" else f"{effective_target_h}H",
                 'progress': f"{progress_pct}%",
                 'status': status_display,
                 'description': desc_text
@@ -429,7 +432,7 @@ elif menu == "➕ 新增投測項目":
                 st.error(f"❌ 專案同步雲端失敗：{e}")
 
 # -----------------------------------------------------------------------------
-# 功能 4：修改 / 刪除專案 (包含中途停測功能)
+# 功能 4：修改 / 刪除專案 (簡化專案狀態)
 # -----------------------------------------------------------------------------
 elif menu == "✏️ 修改 / 刪除專案":
     st.header("✏️ 修改 / 刪除既有投測專案")
@@ -467,18 +470,20 @@ elif menu == "✏️ 修改 / 刪除專案":
                 hours_str_init = ", ".join([str(h) for h in target_p['hours_list']])
                 edit_hours_str = st.text_input("測試時數節點 (以逗號分隔)：", value=hours_str_init)
                 
-                status_options = ["進行中", "已完成", "中途停測", "已暫停", "異常終止"]
+                # 簡化後的狀態選單
+                status_options = ["進行中", "已完成", "停測"]
                 status_index = status_options.index(target_p['status']) if target_p['status'] in status_options else 0
                 edit_status = st.selectbox("專案狀態：", status_options, index=status_index)
                 
                 # 停測專用欄位
-                st.markdown("🛑 **停測設定 (僅在選擇「中途停測」時生效)**")
+                st.markdown("🛑 **停測設定 (僅在選擇「停測」時生效)**")
                 stop_col1, stop_col2 = st.columns(2)
                 with stop_col1:
                     stop_hour_val = target_p['stop_hour'] if target_p['stop_hour'] is not None else target_p['hours_list'][0]
-                    edit_stop_hour = st.selectbox("停測發生時數 (HR)：", target_p['hours_list'], index=target_p['hours_list'].index(stop_hour_val) if stop_hour_val in target_p['hours_list'] else 0)
+                    stop_hour_index = target_p['hours_list'].index(stop_hour_val) if stop_hour_val in target_p['hours_list'] else 0
+                    edit_stop_hour = st.selectbox("停測發生時數 (HR)：", target_p['hours_list'], index=stop_hour_index)
                 with stop_col2:
-                    edit_stop_reason = st.text_input("停測原因 (如: ESR飆高/短路/LC漏電Failure)：", value=target_p['stop_reason'])
+                    edit_stop_reason = st.text_input("停測原因 (自由填寫，如: 有問題 / 不重要了 / ESR飆高)：", value=target_p['stop_reason'])
 
                 edit_description = st.text_area("詳細描述 / 備註：", value=target_p['description'])
                 
@@ -500,8 +505,8 @@ elif menu == "✏️ 修改 / 刪除專案":
                                 "start_time": combined_start.strftime("%Y-%m-%d %H:%M:%S"),
                                 "hours_list": ",".join(map(str, parsed_hours)),
                                 "status": edit_status,
-                                "stop_hour": edit_stop_hour if edit_status == "中途停測" else None,
-                                "stop_reason": edit_stop_reason if edit_status == "中途停測" else "",
+                                "stop_hour": edit_stop_hour if edit_status == "停測" else None,
+                                "stop_reason": edit_stop_reason if edit_status == "停測" else "",
                                 "description": edit_description
                             }
                             
@@ -545,8 +550,8 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
         selected_id = st.selectbox("選擇投測專案編號：", p_ids)
         selected_p = next(p for p in projects_list if p['id'] == selected_id)
         
-        if selected_p['status'] == "中途停測":
-            st.error(f"🚨 本專案已於 **{selected_p['stop_hour']}H** 判定【中途停測】！原因：{selected_p['stop_reason'] or '未填寫'}")
+        if selected_p['status'] == "停測":
+            st.error(f"🚨 本專案已於 **{selected_p['stop_hour']}H** 判定【停測】！原因：{selected_p['stop_reason'] or '未填寫'}")
 
         n_samples = selected_p["sample_size"]
         st.write(f"**規格**：{selected_p['spec']} ({selected_p['condition']}) | **總顆數**：{n_samples} 顆")
@@ -707,21 +712,21 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
 elif menu == "📊 跨批號電性數據比較":
     st.header("📊 多批號 / 實驗組電性平均值對比分析")
     
-    show_stopped_comp = st.checkbox("👁️ 包含「中途停測」項目進行比較", value=True)
+    show_stopped_comp = st.checkbox("👁️ 包含「停測」項目進行比較", value=True)
     
     if not projects_list:
         st.warning("目前尚無投測項目可供比較。")
     else:
         valid_projects = [
             p for p in projects_list 
-            if (p['id'] in test_data_dict) and ("0H" in test_data_dict[p['id']]) and (show_stopped_comp or p['status'] != "中途停測")
+            if (p['id'] in test_data_dict) and ("0H" in test_data_dict[p['id']]) and (show_stopped_comp or p['status'] != "停測")
         ]
         
         if not valid_projects:
             st.warning("沒有符合條件且已填寫 0H 數據的專案。")
         else:
             project_options = [
-                f"#{p['id']} - {p['spec']} ({p['condition']})" + (" [🛑停測]" if p['status'] == "中途停測" else "") 
+                f"#{p['id']} - {p['spec']} ({p['condition']})" + (" [🛑停測]" if p['status'] == "停測" else "") 
                 for p in valid_projects
             ]
             selected_options = st.multiselect(
@@ -759,7 +764,7 @@ elif menu == "📊 跨批號電性數據比較":
                         hours_x = []
                         avg_rates_y = []
                         label_name = f"#{p_id} ({p_info['spec']})"
-                        if p_info['status'] == "中途停測":
+                        if p_info['status'] == "停測":
                             label_name += f" [🛑停於{p_info['stop_hour']}H]"
 
                         row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status'], "0H 平均電容 (uF)": round(avg_cap_0, 2)}
@@ -799,7 +804,7 @@ elif menu == "📊 跨批號電性數據比較":
                         hours_x = []
                         avg_rates_y = []
                         label_name = f"#{p_id} ({p_info['spec']})"
-                        if p_info['status'] == "中途停測":
+                        if p_info['status'] == "停測":
                             label_name += f" [🛑停於{p_info['stop_hour']}H]"
 
                         row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status'], "0H 平均 ESR (mΩ)": round(avg_esr_0, 2)}
@@ -836,7 +841,7 @@ elif menu == "📊 跨批號電性數據比較":
                         hours_x = []
                         avg_vals_y = []
                         label_name = f"#{p_id} ({p_info['spec']})"
-                        if p_info['status'] == "中途停測":
+                        if p_info['status'] == "停測":
                             label_name += f" [🛑停於{p_info['stop_hour']}H]"
 
                         row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status']}
@@ -870,7 +875,7 @@ elif menu == "📊 跨批號電性數據比較":
                         hours_x = []
                         avg_vals_y = []
                         label_name = f"#{p_id} ({p_info['spec']})"
-                        if p_info['status'] == "中途停測":
+                        if p_info['status'] == "停測":
                             label_name += f" [🛑停於{p_info['stop_hour']}H]"
 
                         row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status']}
@@ -897,9 +902,9 @@ elif menu == "📊 跨批號電性數據比較":
 elif menu == "📅 甘特圖排程檢視":
     st.header("📅 信賴性投測甘特圖與時間軸")
     
-    show_stopped_gantt = st.checkbox("👁️ 顯示「中途停測」專案條形圖", value=True)
+    show_stopped_gantt = st.checkbox("👁️ 顯示「停測」專案條形圖", value=True)
     
-    filtered_p_list = [p for p in projects_list if show_stopped_gantt or p['status'] != "中途停測"]
+    filtered_p_list = [p for p in projects_list if show_stopped_gantt or p['status'] != "停測"]
     
     if not filtered_p_list:
         st.warning("目前無符合條件的排程項目。")
@@ -912,8 +917,8 @@ elif menu == "📅 甘特圖排程檢視":
             start = p['start_time']
             sorted_hours = sorted(p['hours_list']) if p['hours_list'] else [0]
             
-            # 若為中途停測，甘特圖時間軸只會畫到停測時數
-            if p['status'] == "中途停測" and p['stop_hour'] is not None:
+            # 若為停測，甘特圖時間軸只會畫到停測時數
+            if p['status'] == "停測" and p['stop_hour'] is not None:
                 display_hours = [h for h in sorted_hours if h <= p['stop_hour']]
             else:
                 display_hours = sorted_hours
@@ -944,7 +949,7 @@ elif menu == "📅 甘特圖排程檢視":
                 target_dt = start + timedelta(hours=h)
                 
                 stage_label = f"{h}H 取測"
-                if p['status'] == "中途停測" and h == p['stop_hour']:
+                if p['status'] == "停測" and h == p['stop_hour']:
                     stage_label = f"🛑 停測 ({h}H)"
 
                 gantt_data.append({
