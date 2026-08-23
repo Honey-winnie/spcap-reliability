@@ -1051,3 +1051,13 @@ if st.button("🔔 測試 LINE 取測提醒"):
         st.success("✅ 已發送至 LINE！")
     else:
         st.error(f"❌ 發送失敗：{status}")
+# --- 顯示 LINE 加好友 QR Code ---
+st.divider()
+st.subheader("🔔 訂閱 SPCAP 取測提醒")
+st.caption(
+    "請 OP 作業人員與工程師使用 LINE 掃描下方 QR Code 加為好友，即可接收每日取測通知："
+)
+
+# 直接使用產好的 LINE 圖片網址
+LINE_QRCODE_URL = "https://qr-official.line.me/sid/c/427mmbbp.png"
+st.image(LINE_QRCODE_URL, width=200)
