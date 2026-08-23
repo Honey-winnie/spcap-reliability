@@ -3,7 +3,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
 
-# 1. 從環境變數讀取 Supabase 與 LINE API 設定
+# 1. 初始化 Supabase 與 LINE API 設定
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 LINE_TOKEN = os.getenv("LINE_TOKEN")
@@ -29,29 +29,46 @@ def send_broadcast_notice(msg):
     return response.status_code
 
 def check_and_send():
-    # 2. 取得台灣時間 (UTC+8) 的今天日期
+    # 2. 取得台灣時間 (UTC+8) 當天日期
     tw_tz = timezone(timedelta(hours=8))
     today_str = datetime.now(tw_tz).strftime("%Y-%m-%d")
     
-    # 查詢 scheduled_date 為今天的抽驗項目
+    # 模糊查詢包含 2026-08-24 的所有資料（解決含時間欄位問題）
+    # 若您資料庫欄位叫 next_test_time 或 target_date，可將下方 scheduled_date 換成對應名稱
     response = supabase.table("reliability_tests") \
         .select("*") \
-        .eq("scheduled_date", today_str) \
+        .like("scheduled_date", f"{today_str}%") \
         .execute()
     
     data = response.data
 
-    # 【無抽驗項目判斷】：若今天沒有任何需抽驗項目，直接結束，不發送 LINE 訊息
+    # 【備用方案】：如果上面的 scheduled_date 查不到，自動改查 due_date 欄位
+    if not data:
+        response = supabase.table("reliability_tests") \
+            .select("*") \
+            .like("due_date", f"{today_str}%") \
+            .execute()
+        data = response.data
+
+    # 【無抽驗項目判斷】
     if not data:
         print(f"[{today_str}] 今日無需抽驗項目，跳過通知發送。")
         return
 
     # 3. 組合通知訊息內容
-    msg_lines = [f"📋 【SPCAP 信賴性抽驗提醒】({today_str})", f"今日共有 {len(data)} 項需抽驗/巡檢：\n"]
+    msg_lines = [f"📋 【SPCAP 信賴性取測提醒】({today_str})", f"今日共有 {len(data)} 項需取測/巡檢：\n"]
     for idx, item in enumerate(data, 1):
-        msg_lines.append(f"{idx}. 實驗單號：{item.get('test_no', 'N/A')}")
-        msg_lines.append(f"   樣品名稱：{item.get('sample_name', 'N/A')}")
-        msg_lines.append(f"   狀態：{item.get('status', 'testing')}\n")
+        spec = item.get('product_spec') or item.get('sample_name') or 'N/A'
+        owner = item.get('owner') or item.get('engineer') or 'N/A'
+        hours = item.get('test_hours') or item.get('status') or 'N/A'
+        time_str = item.get('scheduled_date') or item.get('due_date') or ''
+        
+        msg_lines.append(f"{idx}. 產品規格：{spec}")
+        msg_lines.append(f"   負責人：{owner}")
+        msg_lines.append(f"   取測時數：{hours}")
+        if time_str:
+            msg_lines.append(f"   預計時間：{time_str}")
+        msg_lines.append("")
     
     full_message = "\n".join(msg_lines)
 
