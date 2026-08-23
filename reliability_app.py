@@ -1058,6 +1058,6 @@ st.caption(
     "請 OP 作業人員與工程師使用 LINE 掃描下方 QR Code 加為好友，即可接收每日取測通知："
 )
 
-# 直接使用產好的 LINE 圖片網址
-LINE_QRCODE_URL = "https://qr-official.line.me/sid/c/427mmbbp.png"
+# 使用通用 QR Code 生成 API
+LINE_QRCODE_URL = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=https://line.me/R/ti/p/@427mmbbp"
 st.image(LINE_QRCODE_URL, width=200)
