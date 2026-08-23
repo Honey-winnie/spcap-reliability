@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import date
+from datetime import datetime, timezone, timedelta
 from supabase import create_client
 
 # 1. 從環境變數讀取 Supabase 與 LINE API 設定
@@ -29,8 +29,9 @@ def send_broadcast_notice(msg):
     return response.status_code
 
 def check_and_send():
-    # 2. 取得今天日期
-    today_str = date.today().isoformat()
+    # 2. 取得台灣時間 (UTC+8) 的今天日期
+    tw_tz = timezone(timedelta(hours=8))
+    today_str = datetime.now(tw_tz).strftime("%Y-%m-%d")
     
     # 查詢 scheduled_date 為今天的抽驗項目
     response = supabase.table("reliability_tests") \
