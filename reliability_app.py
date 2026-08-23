@@ -171,12 +171,10 @@ if menu == "📌 提醒與逾期看板":
     tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     
     show_stopped = st.checkbox("👁️ 包含「停測」項目", value=False)
-    
     st.info(f"當前系統時間：**{now.strftime('%Y-%m-%d %H:%M')}**")
     
     alerts = []
     month_schedule = []
-    
     past_14_days = now - timedelta(days=14)
     future_30_days = now + timedelta(days=30)
     
@@ -186,7 +184,6 @@ if menu == "📌 提醒與逾期看板":
             
         p_id = p['id']
         start = p['start_time']
-        
         valid_hours = p['hours_list']
         if p['status'] == "停測" and p['stop_hour'] is not None:
             valid_hours = [h for h in valid_hours if h <= p['stop_hour']]
@@ -347,7 +344,7 @@ elif menu == "📋 投測總表與查詢":
             st.info("無符合條件的專案項目。")
 
 # -----------------------------------------------------------------------------
-# 功能 3：新增投測項目 (含防覆蓋邏輯 + 製程參數欄位)
+# 功能 3：新增投測項目
 # -----------------------------------------------------------------------------
 elif menu == "➕ 新增投測項目":
     st.header("➕ 新建信賴性投測實驗")
@@ -389,7 +386,6 @@ elif menu == "➕ 新增投測項目":
     st.markdown("---")
     st.subheader("🧩 材料與製程詳細參數")
     
-    # 第一排：基本結構與導線架
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
         foil_name = st.text_input("鋁箔名稱", value="A4R2125JLK01B014")
@@ -401,7 +397,6 @@ elif menu == "➕ 新增投測項目":
         leadframe_thickness = st.selectbox("導線架厚度 (mm)", ["0.1", "0.15"], index=1)
         molding_die = st.text_input("封裝模具", value="MOLD-A01")
 
-    # 第二排：含浸與塗膠製程參數
     col_p1, col_p2, col_p3, col_p4 = st.columns(4)
     with col_p1:
         impregnation_param = st.text_input("含浸參數", value="標準PEDOT/PSS (30min)")
@@ -416,7 +411,6 @@ elif menu == "➕ 新增投測項目":
         if not selected_hours_list:
             st.error("❌ 請至少選擇一個取測時數！")
         else:
-            # 防覆蓋邏輯：事先向資料庫查詢該 ID 是否已存在
             check_res = supabase.table("projects").select("id").eq("id", p_id).execute()
             
             if check_res.data and len(check_res.data) > 0:
@@ -426,7 +420,6 @@ elif menu == "➕ 新增投測項目":
                 condition_str = f"{test_temp}°C - {test_item}({test_voltage}V) | MSL3: {msl3}"
                 hours_str = ",".join(map(str, selected_hours_list))
                 
-                # 完整格式化包含含浸與塗膠參數的描述文字
                 formatted_desc = (
                     f"鋁箔: {foil_name} ({foil_width}) | 堆疊: {stack_layers} | 導線架: {leadframe_type} ({leadframe_thickness}mm) | "
                     f"含浸: {impregnation_param} | 塗碳: {carbon_paste_param} | 塗銀: {silver_paste_param} | 堆疊銀膠: {stack_silver_param}"
@@ -444,7 +437,6 @@ elif menu == "➕ 新增投測項目":
                     "description": formatted_desc
                 }
                 try:
-                    # 使用 insert() 強制寫入，防止覆蓋
                     supabase.table("projects").insert(data).execute()
                     st.success(f"✅ 已成功建立專案 #{p_id} 並同步至雲端！")
                     st.rerun()
@@ -462,7 +454,6 @@ elif menu == "✏️ 修改 / 刪除專案":
     else:
         project_ids = [p['id'] for p in projects_list]
         selected_id = st.selectbox("請選擇要編輯的專案編號：", project_ids, key="edit_select_id")
-        
         target_p = next((p for p in projects_list if p['id'] == selected_id), None)
         
         if target_p:
@@ -470,14 +461,8 @@ elif menu == "✏️ 修改 / 刪除專案":
             init_start = target_p['start_time'] if isinstance(target_p['start_time'], datetime) else taipei_now()
             data_version = init_start.strftime("%Y%m%d%H%M%S")
             
-            edit_start_date = st.date_input(
-                "投入日期：", value=init_start.date(),
-                key=f"d_input_{selected_id}_{data_version}"
-            )
-            edit_start_time = st.time_input(
-                "投入時間：", value=init_start.time(),
-                key=f"t_input_{selected_id}_{data_version}"
-            )
+            edit_start_date = st.date_input("投入日期：", value=init_start.date(), key=f"d_input_{selected_id}_{data_version}")
+            edit_start_time = st.time_input("投入時間：", value=init_start.time(), key=f"t_input_{selected_id}_{data_version}")
             
             with st.form(key=f"edit_form_{selected_id}_{data_version}"):
                 st.subheader(f"正在編輯專案：#{target_p['id']}")
@@ -501,7 +486,7 @@ elif menu == "✏️ 修改 / 刪除專案":
                     stop_hour_index = target_p['hours_list'].index(stop_hour_val) if stop_hour_val in target_p['hours_list'] else 0
                     edit_stop_hour = st.selectbox("停測發生時數 (HR)：", target_p['hours_list'], index=stop_hour_index)
                 with stop_col2:
-                    edit_stop_reason = st.text_input("停測原因 (自由填寫，如: 有問題 / 不重要了 / ESR飆高)：", value=target_p['stop_reason'])
+                    edit_stop_reason = st.text_input("停測原因：", value=target_p['stop_reason'])
 
                 edit_description = st.text_area("詳細描述 / 材料與製程備註：", value=target_p['description'])
                 
@@ -536,7 +521,7 @@ elif menu == "✏️ 修改 / 刪除專案":
                                 updated_rows = resp.data or []
 
                             if not updated_rows:
-                                st.error(f"❌ 更新失敗：資料庫中找不到 ID={selected_id}，請檢查欄位型態。")
+                                st.error(f"❌ 更新失敗：資料庫中找不到 ID={selected_id}。")
                             else:
                                 st.success(f"✅ 專案 #{selected_id} 資料已順利更新！")
                                 st.rerun()
@@ -726,7 +711,7 @@ elif menu == "📝 OP 數據填寫與變化率繪圖":
             st.info("💡 請先完成並上傳 **0H 數據**，系統將自動繪製 Cap/DF/ESR/LC 變化趨勢圖。")
 
 # -----------------------------------------------------------------------------
-# 功能 6：跨批號電性數據比較
+# 功能 6：跨批號電性數據比較 (已調整順序與新增 ESR 原始數值對比)
 # -----------------------------------------------------------------------------
 elif menu == "📊 跨批號電性數據比較":
     st.header("📊 多批號 / 實驗組電性平均值對比分析")
@@ -760,13 +745,15 @@ elif menu == "📊 跨批號電性數據比較":
                 st.info("請至少選擇一個批號進行比較。")
             else:
                 st.markdown("---")
-                tab_comp_cap, tab_comp_esr, tab_comp_df, tab_comp_lc = st.tabs([
+                # 調整順序：Cap -> DF -> ESR -> LC
+                tab_comp_cap, tab_comp_df, tab_comp_esr, tab_comp_lc = st.tabs([
                     "⚡ 平均 Cap 變化率 (%)", 
-                    "🔌 平均 ESR 變化率 (%)", 
                     "📉 平均 DF (%)", 
+                    "🔌 平均 ESR (數值 / 變化率)", 
                     "💧 平均 LC (uA)"
                 ])
 
+                # 1. Cap 變化率
                 with tab_comp_cap:
                     fig_comp_cap = go.Figure()
                     table_rows = []
@@ -777,11 +764,9 @@ elif menu == "📊 跨批號電性數據比較":
                         
                         df_0h = p_data["0H"]
                         avg_cap_0 = df_0h["Cap (uF)"].mean()
-                        
                         avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
                         
-                        hours_x = []
-                        avg_rates_y = []
+                        hours_x, avg_rates_y = [], []
                         label_name = f"#{p_id} ({p_info['spec']})"
                         if p_info['status'] == "停測":
                             label_name += f" [🛑停於{p_info['stop_hour']}H]"
@@ -797,9 +782,7 @@ elif menu == "📊 跨批號電性數據比較":
                             if h != 0:
                                 row_dict[f"{h}H 平均變化率(%)"] = round(rate, 2)
                                 
-                        fig_comp_cap.add_trace(go.Scatter(
-                            x=hours_x, y=avg_rates_y, mode='lines+markers', name=label_name
-                        ))
+                        fig_comp_cap.add_trace(go.Scatter(x=hours_x, y=avg_rates_y, mode='lines+markers', name=label_name))
                         table_rows.append(row_dict)
                         
                     fig_comp_cap.add_hline(y=-20, line_dash="dash", line_color="red", annotation_text="Cap 下限 (-20%)")
@@ -807,46 +790,7 @@ elif menu == "📊 跨批號電性數據比較":
                     st.plotly_chart(fig_comp_cap, use_container_width=True)
                     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-                with tab_comp_esr:
-                    fig_comp_esr = go.Figure()
-                    table_rows_esr = []
-                    
-                    for p_id in selected_ids:
-                        p_info = next(p for p in projects_list if p['id'] == p_id)
-                        p_data = test_data_dict[p_id]
-                        
-                        df_0h = p_data["0H"]
-                        avg_esr_0 = df_0h["ESR (mΩ)"].mean()
-                        
-                        avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
-                        
-                        hours_x = []
-                        avg_rates_y = []
-                        label_name = f"#{p_id} ({p_info['spec']})"
-                        if p_info['status'] == "停測":
-                            label_name += f" [🛑停於{p_info['stop_hour']}H]"
-
-                        row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status'], "0H 平均 ESR (mΩ)": round(avg_esr_0, 2)}
-                        
-                        for h in avail_h:
-                            hour_key = f"{h}H"
-                            avg_esr_h = p_data[hour_key]["ESR (mΩ)"].mean()
-                            rate = ((avg_esr_h - avg_esr_0) / avg_esr_0) * 100
-                            hours_x.append(h)
-                            avg_rates_y.append(rate)
-                            if h != 0:
-                                row_dict[f"{h}H 平均變化率(%)"] = round(rate, 2)
-                                
-                        fig_comp_esr.add_trace(go.Scatter(
-                            x=hours_x, y=avg_rates_y, mode='lines+markers', name=label_name
-                        ))
-                        table_rows_esr.append(row_dict)
-                        
-                    fig_comp_esr.add_hline(y=200, line_dash="dash", line_color="red", annotation_text="ESR 上限 (+200%)")
-                    fig_comp_esr.update_layout(title="跨批號平均 ESR 變化率對比趨勢 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔESR (%)")
-                    st.plotly_chart(fig_comp_esr, use_container_width=True)
-                    st.dataframe(pd.DataFrame(table_rows_esr), use_container_width=True, hide_index=True)
-
+                # 2. DF 損耗角
                 with tab_comp_df:
                     fig_comp_df = go.Figure()
                     table_rows_df = []
@@ -854,11 +798,9 @@ elif menu == "📊 跨批號電性數據比較":
                     for p_id in selected_ids:
                         p_info = next(p for p in projects_list if p['id'] == p_id)
                         p_data = test_data_dict[p_id]
-                        
                         avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
                         
-                        hours_x = []
-                        avg_vals_y = []
+                        hours_x, avg_vals_y = [], []
                         label_name = f"#{p_id} ({p_info['spec']})"
                         if p_info['status'] == "停測":
                             label_name += f" [🛑停於{p_info['stop_hour']}H]"
@@ -872,15 +814,86 @@ elif menu == "📊 跨批號電性數據比較":
                             avg_vals_y.append(avg_df_h)
                             row_dict[f"{h}H 平均 DF(%)"] = round(avg_df_h, 2)
                                 
-                        fig_comp_df.add_trace(go.Scatter(
-                            x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name
-                        ))
+                        fig_comp_df.add_trace(go.Scatter(x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name))
                         table_rows_df.append(row_dict)
                         
                     fig_comp_df.update_layout(title="跨批號平均 DF 損耗角對比趨勢 (%)", xaxis_title="時數 (H)", yaxis_title="平均 DF (%)")
                     st.plotly_chart(fig_comp_df, use_container_width=True)
                     st.dataframe(pd.DataFrame(table_rows_df), use_container_width=True, hide_index=True)
 
+                # 3. ESR (包含 原始數值與變化率 子分頁)
+                with tab_comp_esr:
+                    esr_sub_tab1, esr_sub_tab2 = st.tabs(["📏 ESR 原始數值 (mΩ)", "📈 ESR 變化率 (%)"])
+                    
+                    # 3a. ESR 原始數值 (mΩ)
+                    with esr_sub_tab1:
+                        fig_comp_esr_val = go.Figure()
+                        table_rows_esr_val = []
+                        
+                        for p_id in selected_ids:
+                            p_info = next(p for p in projects_list if p['id'] == p_id)
+                            p_data = test_data_dict[p_id]
+                            avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
+                            
+                            hours_x, avg_vals_y = [], []
+                            label_name = f"#{p_id} ({p_info['spec']})"
+                            if p_info['status'] == "停測":
+                                label_name += f" [🛑停於{p_info['stop_hour']}H]"
+
+                            row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status']}
+                            
+                            for h in avail_h:
+                                hour_key = f"{h}H"
+                                avg_esr_h = p_data[hour_key]["ESR (mΩ)"].mean()
+                                hours_x.append(h)
+                                avg_vals_y.append(avg_esr_h)
+                                row_dict[f"{h}H 平均 ESR(mΩ)"] = round(avg_esr_h, 2)
+                                    
+                            fig_comp_esr_val.add_trace(go.Scatter(x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name))
+                            table_rows_esr_val.append(row_dict)
+                            
+                        fig_comp_esr_val.update_layout(title="跨批號平均 ESR 原始數值對比趨勢 (mΩ)", xaxis_title="時數 (H)", yaxis_title="平均 ESR (mΩ)")
+                        st.plotly_chart(fig_comp_esr_val, use_container_width=True)
+                        st.dataframe(pd.DataFrame(table_rows_esr_val), use_container_width=True, hide_index=True)
+
+                    # 3b. ESR 變化率 (%)
+                    with esr_sub_tab2:
+                        fig_comp_esr_rate = go.Figure()
+                        table_rows_esr_rate = []
+                        
+                        for p_id in selected_ids:
+                            p_info = next(p for p in projects_list if p['id'] == p_id)
+                            p_data = test_data_dict[p_id]
+                            
+                            df_0h = p_data["0H"]
+                            avg_esr_0 = df_0h["ESR (mΩ)"].mean()
+                            avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
+                            
+                            hours_x, avg_rates_y = [], []
+                            label_name = f"#{p_id} ({p_info['spec']})"
+                            if p_info['status'] == "停測":
+                                label_name += f" [🛑停於{p_info['stop_hour']}H]"
+
+                            row_dict = {"專案編號/批號": f"#{p_id}", "負責人": p_info['owner'], "條件描述": p_info['condition'], "狀態": p_info['status'], "0H 平均 ESR (mΩ)": round(avg_esr_0, 2)}
+                            
+                            for h in avail_h:
+                                hour_key = f"{h}H"
+                                avg_esr_h = p_data[hour_key]["ESR (mΩ)"].mean()
+                                rate = ((avg_esr_h - avg_esr_0) / avg_esr_0) * 100
+                                hours_x.append(h)
+                                avg_rates_y.append(rate)
+                                if h != 0:
+                                    row_dict[f"{h}H 平均變化率(%)"] = round(rate, 2)
+                                    
+                            fig_comp_esr_rate.add_trace(go.Scatter(x=hours_x, y=avg_rates_y, mode='lines+markers', name=label_name))
+                            table_rows_esr_rate.append(row_dict)
+                            
+                        fig_comp_esr_rate.add_hline(y=200, line_dash="dash", line_color="red", annotation_text="ESR 上限 (+200%)")
+                        fig_comp_esr_rate.update_layout(title="跨批號平均 ESR 變化率對比趨勢 (%)", xaxis_title="時數 (H)", yaxis_title="平均 ΔESR (%)")
+                        st.plotly_chart(fig_comp_esr_rate, use_container_width=True)
+                        st.dataframe(pd.DataFrame(table_rows_esr_rate), use_container_width=True, hide_index=True)
+
+                # 4. LC 漏電流
                 with tab_comp_lc:
                     fig_comp_lc = go.Figure()
                     table_rows_lc = []
@@ -888,11 +901,9 @@ elif menu == "📊 跨批號電性數據比較":
                     for p_id in selected_ids:
                         p_info = next(p for p in projects_list if p['id'] == p_id)
                         p_data = test_data_dict[p_id]
-                        
                         avail_h = sorted([int(h.replace("H", "")) for h in p_data.keys() if h.endswith("H")])
                         
-                        hours_x = []
-                        avg_vals_y = []
+                        hours_x, avg_vals_y = [], []
                         label_name = f"#{p_id} ({p_info['spec']})"
                         if p_info['status'] == "停測":
                             label_name += f" [🛑停於{p_info['stop_hour']}H]"
@@ -906,9 +917,7 @@ elif menu == "📊 跨批號電性數據比較":
                             avg_vals_y.append(avg_lc_h)
                             row_dict[f"{h}H 平均 LC(uA)"] = round(avg_lc_h, 2)
                                 
-                        fig_comp_lc.add_trace(go.Scatter(
-                            x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name
-                        ))
+                        fig_comp_lc.add_trace(go.Scatter(x=hours_x, y=avg_vals_y, mode='lines+markers', name=label_name))
                         table_rows_lc.append(row_dict)
                         
                     fig_comp_lc.update_layout(title="跨批號平均 LC 漏電流對比趨勢 (uA)", xaxis_title="時數 (H)", yaxis_title="平均 LC (uA)")
@@ -922,7 +931,6 @@ elif menu == "📅 甘特圖排程檢視":
     st.header("📅 信賴性投測甘特圖與時間軸")
     
     show_stopped_gantt = st.checkbox("👁️ 顯示「停測」專案條形圖", value=True)
-    
     filtered_p_list = [p for p in projects_list if show_stopped_gantt or p['status'] != "停測"]
     
     if not filtered_p_list:
