@@ -347,7 +347,7 @@ elif menu == "📋 投測總表與查詢":
             st.info("無符合條件的專案項目。")
 
 # -----------------------------------------------------------------------------
-# 功能 3：新增投測項目 (已補回含浸、塗膠與堆疊等完整材料與製程參數)
+# 功能 3：新增投測項目 (含防覆蓋邏輯 + 製程參數欄位)
 # -----------------------------------------------------------------------------
 elif menu == "➕ 新增投測項目":
     st.header("➕ 新建信賴性投測實驗")
@@ -398,7 +398,7 @@ elif menu == "➕ 新增投測項目":
         stack_layers = st.selectbox("堆疊層數 (上+下)", ["1+1", "1+2", "2+1", "2+2", "2+3", "3+2", "3+3", "3+4", "4+3", "4+4"], index=4)
         leadframe_type = st.selectbox("導線架種類", ["C1814導線架", "C1100選鍍導線架", "紫銅導線架", "黃銅導線架", "加寬導線架", "粗化導線架"])
     with col_m3:
-        leadframe_thickness = st.selectbox("導线架厚度 (mm)", ["0.1", "0.15"], index=1)
+        leadframe_thickness = st.selectbox("導線架厚度 (mm)", ["0.1", "0.15"], index=1)
         molding_die = st.text_input("封裝模具", value="MOLD-A01")
 
     # 第二排：含浸與塗膠製程參數
@@ -414,35 +414,42 @@ elif menu == "➕ 新增投測項目":
 
     if st.button("🚀 建立專案並寫入雲端資料庫", type="primary", use_container_width=True):
         if not selected_hours_list:
-            st.error("請至少選擇一個取測時數！")
+            st.error("❌ 請至少選擇一個取測時數！")
         else:
-            start_dt_str = f"{start_date.strftime('%Y-%m-%d')} {start_time.strftime('%H:%M')}"
-            condition_str = f"{test_temp}°C - {test_item}({test_voltage}V) | MSL3: {msl3}"
-            hours_str = ",".join(map(str, selected_hours_list))
+            # 防覆蓋邏輯：事先向資料庫查詢該 ID 是否已存在
+            check_res = supabase.table("projects").select("id").eq("id", p_id).execute()
             
-            # 完整格式化包含含浸與塗膠參數的描述文字
-            formatted_desc = (
-                f"鋁箔: {foil_name} ({foil_width}) | 堆疊: {stack_layers} | 導線架: {leadframe_type} ({leadframe_thickness}mm) | "
-                f"含浸: {impregnation_param} | 塗碳: {carbon_paste_param} | 塗銀: {silver_paste_param} | 堆疊銀膠: {stack_silver_param}"
-            )
-            
-            data = {
-                "id": p_id,
-                "owner": owner,
-                "spec": spec,
-                "sample_size": sample_size,
-                "condition": condition_str,
-                "status": "進行中",
-                "start_time": start_dt_str,
-                "hours_list": hours_str,
-                "description": formatted_desc
-            }
-            try:
-                supabase.table("projects").upsert(data).execute()
-                st.success(f"✅ 已成功建立專案 #{p_id} 並同步至雲端！")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ 專案同步雲端失敗：{e}")
+            if check_res.data and len(check_res.data) > 0:
+                st.error(f"❌ 項目編號 / 批號 **[{p_id}]** 已存在！請重新命名項目編號或批號以避免資料被覆蓋。")
+            else:
+                start_dt_str = f"{start_date.strftime('%Y-%m-%d')} {start_time.strftime('%H:%M')}"
+                condition_str = f"{test_temp}°C - {test_item}({test_voltage}V) | MSL3: {msl3}"
+                hours_str = ",".join(map(str, selected_hours_list))
+                
+                # 完整格式化包含含浸與塗膠參數的描述文字
+                formatted_desc = (
+                    f"鋁箔: {foil_name} ({foil_width}) | 堆疊: {stack_layers} | 導線架: {leadframe_type} ({leadframe_thickness}mm) | "
+                    f"含浸: {impregnation_param} | 塗碳: {carbon_paste_param} | 塗銀: {silver_paste_param} | 堆疊銀膠: {stack_silver_param}"
+                )
+                
+                data = {
+                    "id": p_id,
+                    "owner": owner,
+                    "spec": spec,
+                    "sample_size": sample_size,
+                    "condition": condition_str,
+                    "status": "進行中",
+                    "start_time": start_dt_str,
+                    "hours_list": hours_str,
+                    "description": formatted_desc
+                }
+                try:
+                    # 使用 insert() 強制寫入，防止覆蓋
+                    supabase.table("projects").insert(data).execute()
+                    st.success(f"✅ 已成功建立專案 #{p_id} 並同步至雲端！")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 專案同步雲端失敗：{e}")
 
 # -----------------------------------------------------------------------------
 # 功能 4：修改 / 刪除專案
